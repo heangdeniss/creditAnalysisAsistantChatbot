@@ -1,0 +1,103 @@
+## Data Source Credit risk 
+
+https://www.kaggle.com/datasets/laotse/credit-risk-dataset
+
+
+############## How to download model Llama 3.2 B1 Intrustor
+
+# Use venv
+python -m venv venv
+# Active venv
+# git bash
+source venv/Scripts/activate
+
+##### install packages requirement
+pip install transformers torch huggingface_hub accelerate
+
+# Login Hugging face 
+huggingface-cli login .   and paste your hugging face token/ Need to be verify from hugging face and Meta 
+
+##### How to download model via terminal
+
+python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id='meta-llama/Llama-3.2-1B-Instruct',
+    local_dir='./model',
+    local_dir_use_symlinks=False
+)
+"
+
+##### 3b model 
+python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id='meta-llama/Llama-3.2-3B-Instruct',
+    local_dir='./model/llama-3b',
+    ignore_patterns=['original/*']
+)
+"
+
+### voice transcibe download 
+
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="openai/whisper-large-v3",
+    local_dir="E:/models/whisper-large-v3",
+    local_dir_use_symlinks=False
+)
+
+##### BACKEND python packages requirement
+
+# API framework
+fastapi
+uvicorn[standard]
+pydantic
+
+# LLM & Transformers (Llama 3.2 1B)
+torch
+transformers
+accelerate
+huggingface_hub
+
+# RAG / Vector store
+langchain-chroma
+langchain-huggingface
+sentence-transformers
+
+# OCR
+easyocr
+Pillow
+
+# ML models
+joblib
+scikit-learn
+numpy
+catboost
+
+# Utility
+python-multipart
+
+# Command: pip install fastapi "uvicorn[standard]" pydantic torch transformers accelerate huggingface_hub langchain-chroma langchain-huggingface sentence-transformers easyocr Pillow joblib scikit-learn numpy catboost python-multipart
+
+###### How to install nodemodule in Frontend 
+
+Location to FRONTEND file then using command: npm install
+
+##### Packages requirement for Document loader as TXT and PDF 
+
+TXT command: pip install langchain-community langchain-huggingface langchain-text-splitters langchain-chroma python-dotenv sentence-transformers
+PDF command: pip install langchain-community langchain-huggingface langchain-text-splitters langchain-chroma python-dotenv sentence-transformers pypdf
+
+#############################################################################
+
+
+### create chroma_db 
+First run PDF_loader and Document_Loader
+so it will create chunk in chroma_db
+
+## How to run websever 
+
+open Terminal1 locate to BACKEND then command: python app.py
+open terminal2 locate to Frontend then commnad: npm run dev

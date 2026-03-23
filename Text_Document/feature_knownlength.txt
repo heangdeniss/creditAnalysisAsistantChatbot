@@ -1,0 +1,647 @@
+CREDIT RISK FEATURES — PLAIN ENGLISH REFERENCE
+What each field means, why it matters, and how it affects your loan assessment.
+
+
+FEATURE: AGE (person_age)
+
+What it is:
+Your current age in years at the time of applying for the loan.
+
+Why it matters:
+Age is a rough indicator of financial maturity. Younger borrowers often have shorter
+credit histories, lower incomes, and less financial stability. Older borrowers may
+have more established finances but also more obligations.
+
+Risk by age group:
+- 18 to 22 years: Higher risk. Little credit history and often entry-level income.
+- 23 to 45 years: Moderate to low risk. Peak earning and credit-building years.
+- 46 to 65 years: Generally low risk. Established finances and longer credit history.
+- Over 65: Moderate risk. Fixed income limits capacity for new debt obligations.
+
+Age alone does not determine your outcome. A 22-year-old with high income and good
+credit history can score better than a 45-year-old with poor credit and low income.
+
+
+FEATURE: ANNUAL INCOME (person_income)
+
+What it is:
+Your total gross (before-tax) income per year in US dollars.
+
+Why it matters:
+Income determines how much of your monthly earnings would go toward loan repayment.
+The higher your income relative to the loan amount, the more manageable the payments.
+
+Risk by income level:
+- Below $25,000: High risk. Very limited capacity to absorb loan payments.
+- $25,000 to $50,000: Moderate risk. Manageable only for smaller loan amounts.
+- $50,000 to $100,000: Low to moderate risk. Most standard loans are affordable.
+- Above $100,000: Low risk. Strong repayment capacity for most loan sizes.
+
+A high income helps only if you are not already burdened by large existing debts.
+Income is most meaningful when compared to the loan amount you are requesting.
+
+
+FEATURE: HOME OWNERSHIP (person_home_ownership)
+
+What it is:
+Whether you own your home, are paying a mortgage, rent, or have another arrangement.
+
+Valid values: RENT, OWN, MORTGAGE, OTHER
+
+Why it matters:
+Home ownership reflects financial stability and asset accumulation. It also affects
+how much of your income is consumed by housing costs.
+
+Risk by status:
+- OWN: Lowest risk for this feature. No monthly mortgage or rent obligation.
+  You have built wealth through property and have freed-up monthly income.
+- MORTGAGE: Moderate risk. You are trusted with large long-term debt (positive signal),
+  but your mortgage payment competes with loan repayment capacity.
+- RENT: Moderate to higher risk. No housing asset, ongoing rent reduces disposable
+  income, and renters statistically have higher default rates.
+- OTHER: Highest uncertainty. Unclear financial situation treated conservatively.
+
+Renters can still receive strong loan grades if their income is high, credit history
+is clean, and the loan amount is modest.
+
+
+FEATURE: EMPLOYMENT LENGTH (person_emp_length)
+
+What it is:
+How many years you have been employed at your current or most recent job.
+
+Why it matters:
+Employment length is a measure of income stability. A person who has worked at
+the same employer for many years is likely to continue earning a stable income.
+A person who just started a new job may lose that job before the loan is repaid.
+
+Risk by employment length:
+- 0 years (less than 1 year): High risk. You may be in a probation period or recently
+  unemployed. Income continuity is uncertain.
+- 1 to 2 years: Moderate risk. Some stability established but still early.
+- 3 to 5 years: Low to moderate risk. Reliable employment track record.
+- 6 to 10 years: Low risk. Strong tenure signals the employer values you.
+- 10+ years: Very low risk. Long-term employment is a strong stability indicator.
+
+Having 0 employment years does not automatically reject your application, but it
+does add risk, especially when combined with other weak factors like low income
+or short credit history.
+
+
+FEATURE: LOAN PURPOSE (loan_intent)
+
+What it is:
+The reason you are requesting the loan.
+
+Valid values: EDUCATION, HOMEIMPROVEMENT, MEDICAL, PERSONAL, VENTURE, DEBTCONSOLIDATION
+
+Why it matters:
+The purpose of a loan affects how likely the money will be used productively and
+whether repayment is realistic.
+
+Risk by purpose (from lowest to highest):
+- HOMEIMPROVEMENT: Lowest risk. The money improves a property asset. Borrowers are
+  typically homeowners with established financial stability.
+- EDUCATION: Low to moderate risk. Education is an investment in future earning
+  potential, though there is risk the credential does not lead to higher income.
+- PERSONAL: Moderate risk. Unspecified purpose, lenders cannot assess the use.
+- MEDICAL: Moderate to high risk. Medical emergencies often coincide with income
+  disruption. Financial stress from illness compounds repayment difficulty.
+- VENTURE: High risk. Business investments frequently fail. If the venture fails,
+  the borrower loses both business income and the ability to repay the loan.
+- DEBTCONSOLIDATION: Mixed risk. Can be positive (seeking better terms) or negative
+  (already struggling to manage multiple debt payments). Risk depends on total debt load.
+
+
+FEATURE: LOAN AMOUNT (loan_amnt)
+
+What it is:
+The total dollar amount you are requesting to borrow.
+
+Why it matters:
+The loan amount must be manageable relative to your income. A large loan for someone
+with low income creates significant monthly payment pressure.
+
+Risk by loan-to-income ratio (loan amount divided by annual income):
+- Less than 10 percent of income: Very low risk. Easily affordable.
+- 10 to 20 percent of income: Low risk. Comfortably within repayment capacity.
+- 20 to 35 percent of income: Moderate risk. Payment is noticeable but manageable.
+- 35 to 50 percent of income: High risk. Loan is a significant financial burden.
+- Above 50 percent of income: Very high risk. Payments would consume a large share of earnings.
+
+Example: A $10,000 loan is very different for a $100,000 earner (10 percent of income,
+low risk) versus a $15,000 earner (67 percent of income, very high risk).
+
+Requesting a smaller loan amount is one of the fastest ways to improve your
+chances of approval.
+
+
+FEATURE: INTEREST RATE (loan_int_rate)
+
+What it is:
+The annual interest rate on the loan, expressed as a percentage (for example, 14.5 percent).
+
+Why it matters:
+Interest rate reflects how the lending market has already assessed your credit risk.
+Higher rates mean higher monthly payments, which directly increases the chance that
+repayments become unmanageable.
+
+Risk by interest rate:
+- 5 to 8 percent: Excellent. You are considered a prime borrower with very low risk (Grade A).
+- 8 to 12 percent: Good. Low to moderate risk (Grade B to C). Standard lending terms.
+- 12 to 16 percent: Elevated. Sub-prime tier (Grade C to D). Monthly payments become burdensome.
+- 16 to 20 percent: High risk (Grade D to E). Lender already views you as high risk.
+- Above 20 percent: Very high risk (Grade E to F). Payments consume a large share of income.
+
+A high interest rate both reflects existing risk and creates new risk by increasing
+the payment burden on the borrower.
+
+
+FEATURE: PRIOR DEFAULT ON FILE (cb_person_default_on_file)
+
+What it is:
+Whether a credit bureau has recorded a formal default against you in the past.
+A default means a lender previously declared you unable or unwilling to repay a loan.
+
+Valid values: Y (yes, prior default exists), N (no prior default)
+
+Why it matters:
+A prior default is one of the most damaging items on a credit profile. Research
+consistently shows that past defaulters are 2 to 5 times more likely to default again.
+Even if your income and employment are strong, a default flag significantly increases
+the assessed probability of default.
+
+What it means in practice:
+- N (no default): Neutral to positive. Your credit file is clean on this dimension.
+- Y (prior default): Major negative factor. It does not automatically disqualify you,
+  but it raises your default probability significantly and can push your grade to D or E.
+
+The default flag remains on credit bureau records for up to 7 years from the date of
+first delinquency. After that period it is removed and no longer affects your score.
+
+How to address a prior default:
+- If the default is recent, rebuilding credit actively over 12 to 24 months can
+  partially offset its impact by demonstrating consistent on-time payment behavior.
+- Dispute any inaccurate default records with the credit bureau in writing.
+- A co-signer with a clean record can help compensate for this risk factor.
+
+
+FEATURE: CREDIT HISTORY LENGTH (cb_person_cred_hist_length)
+
+What it is:
+How many years you have had an active credit file, the length of your borrowing history.
+
+Why it matters:
+Lenders use your past behavior to predict your future behavior. The longer your credit
+history, the more data there is to assess whether you are a reliable borrower. A very
+short history means the assessment is based on uncertainty rather than evidence.
+
+Risk by credit history length:
+- Under 2 years: High uncertainty. Lenders cannot distinguish a reliable borrower
+  from an unreliable one. Risk is elevated by default because of insufficient data.
+- 2 to 5 years: Developing history. Some track record but still limited evidence.
+- 5 to 10 years: Solid history. Meaningful patterns of behavior are visible.
+- Over 10 years: Strong history. Long track record significantly lowers risk.
+
+A short credit history does not mean you are irresponsible. It may simply mean
+you are young or new to formal credit systems. This is called a thin file problem.
+
+How to build credit history faster:
+- Open a secured credit card and pay the full balance every month.
+- Become an authorized user on a family member account with good standing.
+- Take out a credit-builder loan from a credit union.
+- Keep old accounts open because closing them shortens your average history length.
+
+
+SUMMARY: HOW FEATURES COMBINE
+
+No single feature determines your loan outcome. The model considers all features
+together. Here are the most impactful combinations:
+
+Highest risk profile (likely Grade D or E):
+- Low income relative to high loan amount
+- Prior default on file
+- Short credit history under 2 years
+- New job or unemployed with 0 employment years
+- High interest rate already assigned
+- Renting with no housing asset
+- VENTURE or DEBTCONSOLIDATION loan purpose
+
+Lowest risk profile (likely Grade A or B):
+- High income relative to loan amount
+- No prior default on file
+- Long credit history of 8 or more years
+- Stable long-term employment of 5 or more years
+- Low interest rate
+- Homeowner (OWN or MORTGAGE)
+- HOMEIMPROVEMENT or EDUCATION loan purpose
+
+The fastest improvements you can make to your profile:
+1. Request a smaller loan amount to directly reduce your loan-to-income ratio.
+2. Avoid taking on new debt before applying.
+3. Build 12 months of on-time payment history using a secured credit card.
+4. Maintain continuous employment without gaps before applying.
+5. Wait for any prior default to age off the credit bureau record after 7 years.
+
+
+FREQUENTLY ASKED QUESTIONS ABOUT CREDIT RISK FACTORS
+
+Question: I am 20 years old. Will my age alone cause rejection?
+Age alone will not automatically cause rejection. However, at age 20, you likely have
+a short credit history — perhaps 1 to 2 years — and an entry-level income. These two
+factors in combination with a young age do increase your risk profile. The good news is
+that time works in your favor. Every year of on-time payments builds your history, and
+income typically grows over time. Applying for a small, manageable loan and repaying it
+perfectly is the best thing a young borrower can do to build toward stronger approval
+outcomes in the future.
+
+Question: I earn $80,000. Why was I still given a high-risk score?
+A high income helps, but it does not override other strong risk factors. If you have a
+prior default on your credit bureau file, that single item can push your grade to D or E
+regardless of income. If your requested loan amount is very large — for example, $60,000
+on an $80,000 income — the loan consumes 75% of a year's earnings, which is extremely
+high. If you have an existing mortgage, car loan, and credit card balances that together
+consume 40% or more of your monthly income, your debt-to-income ratio is already elevated
+before this new loan is added. Lenders do not look at income alone; they look at income
+in relation to all existing and new obligations.
+
+Question: I rent an apartment. Is renting always seen negatively?
+Renting is not inherently disqualifying. Many excellent borrowers rent. What renting
+signals to a lender is the absence of a real estate asset and the ongoing cost of monthly
+rent reducing your disposable income. Renters with high incomes, long credit histories,
+stable employment, and no prior defaults consistently receive strong grades. Renting only
+becomes a significant risk factor when it is combined with other weak indicators such as
+low income, short credit history, or a large loan request.
+
+Question: I have been employed for only 8 months. How much does this hurt?
+Employment under one year is recorded as 0 in the employment length field and is treated
+as high risk for income continuity. It does not mean you are unemployed — it means the
+lender cannot confirm that your income will continue beyond the near term. This is
+particularly important for loans with repayment periods of 2 to 5 years. If you can
+hold your current position for another 4 months and reach the one-year mark, your risk
+profile improves. At 2 years, the employment risk factor reduces significantly.
+
+Question: I am taking a loan for my small business. Why is VENTURE risky?
+When you take a personal loan for a business venture, you are pledging your personal
+creditworthiness against a business outcome. Business success is highly uncertain —
+the majority of new businesses do not survive their first five years. If the business
+fails, you lose both the business income you were counting on and your ability to repay
+the personal loan. There is no business collateral behind a personal loan, unlike a
+dedicated small business loan that might be secured against business assets. The risk
+is that the repayment source (business profit) may disappear entirely.
+
+Question: My medical loan was for a one-time emergency. Why is it still risky?
+Medical emergencies are high-risk not because of the medical event itself, but because
+of the financial disruption that often accompanies it. When you are ill or injured,
+you may miss work, use up savings, or face ongoing treatment costs. A borrower applying
+for a medical loan is often in financial distress at the exact moment of applying. Even
+if the medical situation is now resolved, the lender cannot verify that from the
+application data alone. If you can document that you are fully employed, your health
+event is resolved, and your finances are stable, this context helps significantly in a
+manual underwriting review.
+
+Question: My loan amount is $5,000. Why is that considered high risk?
+Loan risk is never about the absolute dollar amount. It is always about the amount
+relative to your income and existing debt obligations. A $5,000 loan for someone earning
+$9,000 per year represents more than half of their annual income — which is a very high
+burden. The same $5,000 loan for someone earning $70,000 is less than 7% of income —
+trivially affordable. Always think about your loan in terms of what percentage of your
+income it represents and how it fits into your monthly budget alongside existing payments.
+
+Question: I have no credit history at all. What can I do?
+Having no credit history — sometimes called a thin file — is treated as elevated risk
+because lenders have no data to predict your future behavior. This is not a penalty for
+being irresponsible; it is a consequence of having no track record. The most effective
+way to build credit from zero is threefold. First, open a secured credit card — a card
+where you deposit the credit limit as security. Use it for small purchases and pay the
+full balance every month. Second, take out a credit-builder loan from a credit union,
+which works by making payments that are only released to you after the loan is fully paid.
+Third, if a family member has excellent credit, ask to be added as an authorized user on
+their credit card — their positive history will appear on your file. After 12 to 18 months
+of this consistent behavior, you will have enough history to support a meaningful
+loan application.
+
+Question: I had a default 4 years ago but have been perfect since. Does it still matter?
+Yes, it still matters, but less than it did at the time of the default. A default recorded
+4 years ago will remain on your credit bureau file for up to 7 years from the date of
+first delinquency. During those 7 years, it is visible to lenders and negatively affects
+your grade. However, the weight the model places on a 4-year-old default is lower than
+on a recent one. If your past 4 years show a clean and consistent payment record, that
+positive history offsets some of the damage from the old default. At the 7-year mark,
+the default drops off your file entirely, removing this factor from your profile.
+
+Question: My interest rate is 19%. Does that mean I will definitely be rejected?
+An interest rate of 19% reflects that the lender who assigned it already assessed you as
+a high-risk borrower. The model interprets this as confirmation of risk — the external
+market agrees with a high-risk assessment. Additionally, a 19% rate means your monthly
+payments are significantly higher than they would be at 10%, which reduces how much of
+your income is left for other expenses. Whether this leads to a REJECT depends on the
+combination of all factors together. If your income is high, your loan amount is modest,
+and all other indicators are clean, the model may still output Grade D (REVIEW) rather
+than Grade E (REJECT). A 19% rate alone is not an automatic REJECT.
+
+Question: What is the single most important thing I can do to improve my profile today?
+If you have not yet applied, the single most impactful immediate action is to reduce the
+loan amount you intend to request. A smaller loan relative to income directly improves
+your loan-to-income ratio, which is one of the most heavily weighted factors in the
+assessment. Other improvements — building credit history, reducing debt, extending
+employment — take months or years. Requesting a smaller, realistic loan amount is
+something you control right now and can change your outcome today.
+
+If you have already been rejected, the single most impactful long-term action is to build
+a consistent on-time payment history. This requires 12 to 24 months of disciplined
+behavior but reliably converts thin-file and recovering-default applicants into approvable
+profiles for modest loan amounts.
+
+
+ADDITIONAL CONTEXT: HOW FEATURES INTERACT WITH EACH OTHER
+
+Age and credit history length almost always move together. A 45-year-old with only
+2 years of credit history is unusual and signals a recent credit start, possibly after
+immigration, bankruptcy discharge, or prior avoidance of formal credit. The model
+treats this combination with more uncertainty than either factor alone.
+
+Income and loan amount are evaluated as a ratio, not independently. A $50,000 income
+with a $5,000 loan request (10% ratio) is strong. The same $50,000 income with a
+$45,000 loan request (90% ratio) is very high risk. Income is not inherently good or bad
+in isolation — it only has meaning relative to the obligations being considered.
+
+Employment length and income level work together to define income confidence. High
+income with long tenure is the strongest possible signal. High income with very short
+tenure is treated with moderate skepticism. The lender is asking: how certain are we
+that this income will still exist in 3 years?
+
+Prior default and credit history length interact meaningfully. A default that occurred
+10 years ago on a credit file that shows 15 years of total history represents a single
+lapse in an otherwise long record. A default that occurred 2 years ago on a credit file
+that is only 2 years long means your entire credit history is defined by that default.
+These two situations carry very different risk implications even though both show
+a prior default on file.
+
+Loan purpose and home ownership status often correlate with the type of borrower.
+Home improvement loans are almost exclusively taken by homeowners, which means
+this combination is reliable. A borrower listing HOMEIMPROVEMENT as the purpose
+but having RENT as home ownership status is inconsistent and may prompt additional
+verification during underwriting.
+
+Interest rate and loan grade are both measures of risk, but they work at different
+levels. The interest rate assigned by a prior lender is an external assessment of
+this borrower's risk at a specific point in time. The grade assigned by this model
+is a fresh assessment of the full current profile. When these two assessments
+agree — a high interest rate corresponding to a low grade — the confidence in the
+risk assessment increases. When they diverge — a high interest rate but otherwise
+strong profile — the model may output a moderate grade, signaling that the current
+profile has improved from the time the interest rate was originally set.
+
+PRACTICAL EXAMPLES: WHAT GOOD AND BAD PROFILES LOOK LIKE
+
+Example Profile 1 — Strong approval candidate (Grade A):
+Age: 38 years
+Annual income: $95,000
+Home ownership: MORTGAGE
+Employment length: 9 years
+Loan purpose: HOMEIMPROVEMENT
+Loan amount: $8,000
+Interest rate: 6.5%
+Prior default on file: N
+Credit history length: 14 years
+
+Why this profile is strong:
+The person is mid-career with nearly a decade at the same employer. Their income is
+high relative to the loan — $8,000 is about 8% of annual income, well below the 20%
+threshold for low risk. They own a home with a mortgage, showing they have managed
+large long-term debt before. No prior default on file means no behavioral red flags.
+Fourteen years of credit history provides abundant data for confident prediction.
+The interest rate already assigned is 6.5%, confirming an external lender also views
+them as prime.
+
+
+Example Profile 2 — Borderline case (Grade C or D):
+Age: 27 years
+Annual income: $38,000
+Home ownership: RENT
+Employment length: 2 years
+Loan purpose: PERSONAL
+Loan amount: $11,000
+Interest rate: 13.5%
+Prior default on file: N
+Credit history length: 4 years
+
+Why this profile is borderline:
+The loan amount is about 29% of annual income — in the moderate-to-high range. The
+person rents, indicating no housing asset. Employment is only 2 years, providing
+some but limited stability evidence. Credit history at 4 years is developing but
+not strong. The interest rate of 13.5% already signals that the market views this
+as a sub-prime case. No prior default is the main positive factor. This profile
+sits between Grade C and D depending on the precise combination — a manual underwriter
+should review and potentially approve a smaller loan amount.
+
+
+Example Profile 3 — High-risk rejection candidate (Grade E):
+Age: 23 years
+Annual income: $21,000
+Home ownership: RENT
+Employment length: 0 years
+Loan purpose: VENTURE
+Loan amount: $15,000
+Interest rate: 21%
+Prior default on file: Y
+Credit history length: 1 year
+
+Why this profile triggers rejection:
+Almost every factor is at maximum risk. The person is young with a very short credit
+history of only 1 year. They are unemployed or newly employed (0 years). Their income
+is very low and the loan request at $15,000 represents 71% of annual income. The
+interest rate of 21% is already in the extreme risk tier. There is a prior default on
+file. The loan purpose is VENTURE — the highest-risk category. Any one of these factors
+would elevate risk. All of them together create a profile where default probability
+is extremely high.
+
+
+Example Profile 4 — Recovering borrower making progress (Grade D):
+Age: 34 years
+Annual income: $58,000
+Home ownership: RENT
+Employment length: 3 years
+Loan purpose: DEBTCONSOLIDATION
+Loan amount: $12,000
+Interest rate: 16%
+Prior default on file: Y
+Credit history length: 7 years
+
+Why this profile is Grade D rather than Grade E:
+This person is in financial recovery. Their default is on file but their credit
+history is 7 years long, meaning the default is not recent relative to the full
+history. Employment of 3 years shows stabilization. Income of $58,000 means the
+$12,000 loan is about 21% of income — manageable if the interest rate comes down.
+The high interest rate (16%) is a concern and a co-signer or collateral could
+help convert this to a conditional approval. The DEBTCONSOLIDATION intent makes
+sense in context — they are trying to consolidate and simplify existing obligations.
+
+
+DEEP DIVE: ANNUAL INCOME — WHAT IT REALLY TELLS LENDERS
+
+Income does not tell the full story on its own. What matters is net free cash flow —
+the portion of income that is genuinely available to service a new loan after all
+other obligations are met. Two people earning $60,000 can have radically different
+repayment capacities depending on their existing obligations.
+
+Borrower A — $60,000 income:
+Monthly mortgage payment: $0 (owns home outright)
+Existing car loan payment: $0 (no car loan)
+Credit card minimum payment: $50
+Monthly rent: $0
+Available for new loan: most of monthly take-home
+
+Borrower B — $60,000 income:
+Monthly mortgage payment: $1,400
+Existing car loan payment: $380
+Credit card minimum payment: $250
+Available for new loan: substantially less
+
+Both borrowers have the same income. Borrower A can comfortably afford a $600 monthly
+loan payment. Borrower B may struggle with $200. The model uses income and loan amount
+together but cannot see all existing obligations unless they are captured in the interest
+rate as a proxy signal.
+
+Income types and their stability ranking (most to least stable):
+Salaried employment income: highest stability, easiest to verify.
+Hourly wage with consistent full-time hours: high stability.
+Commission-based income: moderate stability, variable.
+Freelance or contractor income: moderate to low stability, highly variable.
+Rental property income: moderate stability, dependent on occupancy.
+Investment income: variable, market-dependent.
+Business profit: lowest stability, most variable.
+
+The model records only a single income number without knowing which type of income
+it represents. A salary of $60,000 and freelance income averaging $60,000 per year
+carry different risks, but the model treats them identically. Human underwriters
+should note income type when reviewing applications.
+
+
+DEEP DIVE: EMPLOYMENT LENGTH — EDGE CASES AND NUANCES
+
+The 0-year employment edge case:
+Employment length of 0 years covers a wide range of situations. A person who started
+a new job 6 months ago is very different from an unemployed person who is seeking
+income through other means. The model cannot distinguish these cases. A borrower
+with 0 employment years should be given the opportunity to explain their situation
+during the underwriting process.
+
+Recently promoted borrowers:
+A person who was promoted to a much higher-paying role recently may show 0 or 1 year
+at that salary level even if they have 10 years at the same company. Their stated
+income reflects the new role, but their employment length records their time in the
+new position. This can create a misleading picture. Total tenure at the company is
+more meaningful than tenure in the current role in this scenario.
+
+Self-employed borrowers and employment length:
+A self-employed person's employment length is typically recorded as the number of
+years their business has been operating. This is reasonable but incomplete — a 1-year-
+old business is genuinely uncertain. A 5-year-old profitable business with consistent
+revenue is meaningfully more stable, but the lender needs business tax returns and
+financial statements to verify this, not just the stated employment length field.
+
+Voluntary career changes versus involuntary job loss:
+Someone who left one stable job for a better-paying one shows 0 years at the new
+employer even though they have a strong overall work history. Someone who was laid off
+or fired also shows 0 years after finding new work. The model treats both identically.
+Supplementary documentation — references from prior employer, official departure reason —
+can help distinguish voluntary positive moves from signs of instability.
+
+
+DEEP DIVE: LOAN INTENT — WHAT BORROWERS MEAN AND WHAT LENDERS HEAR
+
+When a borrower selects PERSONAL as the loan intent, they typically mean the purpose
+does not fit neatly into the available categories, or they prefer not to specify the
+exact use. From a lender's perspective, PERSONAL is the least informative category.
+The model defaults to moderate risk for unspecified purposes.
+
+When a borrower selects EDUCATION, the loan may be for tuition, books, housing costs
+during study, or professional certification courses. These uses vary widely in their
+expected return on investment. A certification from a recognized professional body
+in a high-demand field has a very different expected income impact than a general
+personal development course. The model cannot distinguish these — all appear as EDUCATION.
+
+When a borrower selects MEDICAL, the payment target matters. Medical debt to a hospital
+carries different implications than medical debt for cosmetic procedures or non-urgent
+care. Emergency medical debt combined with income interruption is the highest-risk
+scenario. Elective medical debt without income disruption is substantially lower risk.
+
+When a borrower selects DEBTCONSOLIDATION, the lender should verify:
+How many debts are being consolidated?
+What are the current interest rates on those debts?
+What is the new proposed rate on the consolidation loan?
+Will the monthly payment genuinely decrease?
+Will the borrower commit to closing the consolidated accounts?
+Without these answers, approving a consolidation loan adds debt rather than resolving it.
+
+
+DEEP DIVE: INTEREST RATE AS A RISK SIGNAL
+
+The assigned interest rate is not just an input to this model — it is itself a prediction
+made by a prior lender or credit service about the borrower's risk level. When the interest
+rate is high, two things are true simultaneously.
+
+First, a prior assessor already concluded that this borrower carries elevated risk. The
+market has priced in that risk. This is corroborating evidence that the model's own high-
+risk assessment is supported by an independent evaluation.
+
+Second, the high interest rate itself creates a higher payment burden, which increases the
+probability of default regardless of the borrower's initial intentions. A borrower who
+would reliably repay a $300 monthly payment may struggle with the $420 monthly payment that
+a 20% rate on the same loan amount produces. The rate transforms a manageable obligation
+into a marginal one.
+
+This is why a high interest rate in the model both reflects existing risk and creates
+additional risk. It is simultaneously a diagnostic signal and a causal factor. Underwriters
+should treat any loan with an interest rate above 16% with heightened scrutiny, not merely
+because of what the rate signals but because of what it does to the borrower's monthly budget.
+
+
+REFERENCE: LOAN GRADE DESCRIPTIONS AND TYPICAL PROFILES
+
+Grade A borrowers typically have:
+Credit history of 10 or more years with no missed payments
+Annual income of $75,000 or more
+Loan amount under 15% of annual income
+Employment of 6 or more years
+Home ownership of OWN or MORTGAGE
+No prior default on file
+Interest rate of 5 to 8 percent
+
+Grade B borrowers typically have:
+Credit history of 5 to 10 years with no recent missed payments
+Annual income of $50,000 to $80,000
+Loan amount of 15 to 25% of annual income
+Employment of 3 to 7 years
+Home ownership of MORTGAGE or RENT with good income
+No prior default on file
+Interest rate of 8 to 11 percent
+
+Grade C borrowers typically have:
+Credit history of 3 to 6 years, possibly with old minor negatives
+Annual income of $35,000 to $55,000
+Loan amount of 20 to 35% of annual income
+Employment of 2 to 4 years
+Home ownership of RENT
+No prior default, or default resolved long ago
+Interest rate of 11 to 14 percent
+
+Grade D borrowers typically have:
+Credit history of 2 to 4 years or thin file
+Annual income of $25,000 to $40,000
+Loan amount of 30 to 45% of annual income
+Employment of 1 to 3 years or recent change
+Home ownership of RENT or OTHER
+Possibly a prior default on file
+Interest rate of 14 to 18 percent
+
+Grade E borrowers typically have:
+Credit history under 2 years or history marked by defaults
+Annual income under $30,000 for the loan size requested
+Loan amount above 45% of annual income
+Employment of 0 to 1 year
+Home ownership of RENT or OTHER
+Prior default on file
+Interest rate above 18 percent

@@ -1,0 +1,31 @@
+# Credit Risk RAG — Python dependencies
+# Install: pip install -r requirements.txt
+#
+# PyTorch is listed without extras — install the build matching your hardware:
+#   CPU only:   pip install torch
+#   CUDA 12.1:  pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   CUDA 11.8:  pip install torch --index-url https://download.pytorch.org/whl/cu118
+
+# Web framework
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+
+# LLM & tokenizer
+transformers>=4.40
+torch>=2.2
+
+# Vector store & embeddings
+langchain-chroma>=0.1
+langchain-huggingface>=0.0.3
+chromadb>=0.5
+sentence-transformers>=3.0
+
+# ML models
+catboost>=1.2
+joblib>=1.3
+numpy>=1.26
+shap>=0.44
+
+# Core
+pydantic>=2.6
