@@ -14,6 +14,8 @@ import logging
 import os
 import sys
 import warnings
+from collections import Counter
+from statistics import median
 
 os.environ["TF_ENABLE_ONEDNN_OPTS"]  = "0"
 os.environ["TF_CPP_MIN_LOG_LEVEL"]   = "3"
@@ -34,7 +36,14 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from rag_pipeline import rag_query, rag_stream, get_retriever, retriever_is_loaded
+from rag_pipeline import (
+    SCORE_THRESHOLD,
+    TOP_K,
+    get_retriever,
+    rag_query,
+    rag_stream,
+    retriever_is_loaded,
+)
 from model_loader import DEFAULT_MODEL, load_model, model_is_loaded, model_is_busy, current_model_name, switch_model
 from ml_predict import load_all_models, predict as ml_predict, explain_shap
 from chroma_loader import load_chroma_db
@@ -220,6 +229,95 @@ def explain(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.get("/dashboard/stats")
+def dashboard_stats(
+    limit: int = Query(default=1500, ge=100, le=10000, description="Maximum number of docs to sample."),
+) -> dict:
+    """Return corpus-level statistics for the frontend dashboard."""
+    try:
+        db = load_chroma_db()
+        collection = getattr(db, "_collection", None)
+        if collection is None:
+            raise RuntimeError("Could not access Chroma collection.")
+
+        total_documents = int(collection.count())
+        sample_size = min(total_documents, limit)
+
+        length_buckets = {"0-100": 0, "101-250": 0, "251-500": 0, "501+": 0}
+        source_distribution: dict[str, int] = {}
+
+        if sample_size == 0:
+            return {
+                "documents": {
+                    "total_documents": 0,
+                    "sample_size": 0,
+                    "sampled": False,
+                    "average_words": 0.0,
+                    "median_words": 0.0,
+                    "average_characters": 0.0,
+                    "source_distribution": source_distribution,
+                    "length_buckets": length_buckets,
+                },
+                "retrieval": {"top_k": TOP_K, "score_threshold": SCORE_THRESHOLD},
+            }
+
+        payload = collection.get(limit=sample_size, include=["documents", "metadatas"])
+        docs = payload.get("documents") or []
+        metas = payload.get("metadatas") or []
+
+        word_counts: list[int] = []
+        char_counts: list[int] = []
+        sources = Counter()
+
+        for idx, raw_doc in enumerate(docs):
+            if isinstance(raw_doc, list):
+                text = " ".join(str(part) for part in raw_doc if part is not None)
+            else:
+                text = "" if raw_doc is None else str(raw_doc)
+
+            words = len(text.split())
+            chars = len(text)
+            word_counts.append(words)
+            char_counts.append(chars)
+
+            if words <= 100:
+                length_buckets["0-100"] += 1
+            elif words <= 250:
+                length_buckets["101-250"] += 1
+            elif words <= 500:
+                length_buckets["251-500"] += 1
+            else:
+                length_buckets["501+"] += 1
+
+            meta = metas[idx] if idx < len(metas) and isinstance(metas[idx], dict) else {}
+            source = str(meta.get("source", "unknown")).strip() or "unknown"
+            sources[source] += 1
+
+        source_distribution = dict(sorted(sources.items(), key=lambda item: item[1], reverse=True))
+        average_words = round(sum(word_counts) / len(word_counts), 2) if word_counts else 0.0
+        median_words = round(float(median(word_counts)), 2) if word_counts else 0.0
+        average_characters = round(sum(char_counts) / len(char_counts), 2) if char_counts else 0.0
+
+        return {
+            "documents": {
+                "total_documents": total_documents,
+                "sample_size": sample_size,
+                "sampled": sample_size < total_documents,
+                "average_words": average_words,
+                "median_words": median_words,
+                "average_characters": average_characters,
+                "source_distribution": source_distribution,
+                "length_buckets": length_buckets,
+            },
+            "retrieval": {
+                "top_k": TOP_K,
+                "score_threshold": SCORE_THRESHOLD,
+            },
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.post("/ingest", status_code=201)
 def ingest(body: IngestRequest, request: Request) -> dict:
     """Add text documents to the ChromaDB knowledge base.
@@ -237,7 +335,6 @@ def ingest(body: IngestRequest, request: Request) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-# Entry point
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000,

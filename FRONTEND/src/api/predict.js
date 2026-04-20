@@ -67,3 +67,34 @@ export async function explainShap(data, model = 'catboost') {
     clearTimeout(timer);
   }
 }
+
+/**
+ * Fetch aggregate corpus and retrieval statistics for the dashboard.
+ *
+ * @param {number} limit Maximum number of documents to sample
+ * @returns {Promise<object>} { documents: {...}, retrieval: {...} }
+ */
+export async function fetchDashboardStats(limit = 1500) {
+  const controller = new AbortController();
+  const timer = _timeout(30_000, controller);
+
+  try {
+    const res = await fetch(`${API}/dashboard/stats?limit=${encodeURIComponent(limit)}`, {
+      method:  'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal:  controller.signal,
+    });
+
+    if (!res.ok) {
+      const { detail } = await res.json().catch(() => ({}));
+      throw new Error(detail ?? res.statusText);
+    }
+
+    return res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Dashboard stats request timed out (30 s).');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}

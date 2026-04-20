@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { predict, explainShap } from '../api/predict';
+import { predict, explainShap, fetchDashboardStats } from '../api/predict';
 import { streamQuery } from '../api/chat';
+import RiskDashboard from './RiskDashboard';
 
 const INIT = {
   person_age:                 '',
@@ -25,6 +26,7 @@ const MODEL_LABELS = {
 export default function PredictPanel({ llmModel = 'llama-1b' }) {
   const [form,       setForm]       = useState(INIT);
   const [result,     setResult]     = useState(null);
+  const [submittedInput, setSubmittedInput] = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState('');
   const [activeChat, setActiveChat] = useState(null); // { modelKey, modelLabel, r }
@@ -32,6 +34,26 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
   const [shapOpen,   setShapOpen]   = useState(null);  // null | modelKey string
   const [shapData,   setShapData]   = useState({});    // { [modelKey]: shap result }
   const [shapError,  setShapError]  = useState({});    // { [modelKey]: string }
+  const [dashboardStats,   setDashboardStats]   = useState(null);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardError,   setDashboardError]   = useState('');
+
+  const loadDashboardStats = useCallback(async () => {
+    setDashboardLoading(true);
+    setDashboardError('');
+    try {
+      const stats = await fetchDashboardStats();
+      setDashboardStats(stats);
+    } catch (err) {
+      setDashboardError(err.message ?? 'Failed to load dashboard stats.');
+    } finally {
+      setDashboardLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDashboardStats();
+  }, [loadDashboardStats]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -70,6 +92,7 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
     setLoading(true);
     setError('');
     setResult(null);
+    setSubmittedInput(null);
     try {
       const payload = {
         ...form,
@@ -88,6 +111,8 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
       setShapData({});
       setShapError({});
       setResult(newResult);
+      setSubmittedInput(payload);
+      void loadDashboardStats();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -231,6 +256,15 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
         </div>
 
       </div>
+
+      <RiskDashboard
+        result={result}
+        inputData={submittedInput}
+        dashboardStats={dashboardStats}
+        loading={dashboardLoading}
+        error={dashboardError}
+        onRefresh={() => { void loadDashboardStats(); }}
+      />
 
       {/* ── Full-width SHAP explanation section ──────────── */}
       {result && shapOpen && MODEL_LABELS[shapOpen] && (
