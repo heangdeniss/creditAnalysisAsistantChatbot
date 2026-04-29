@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { predict, explainShap, fetchDashboardStats } from '../api/predict';
+import { predict, explainShap, fetchDashboardStats, fetchMetricsSummary } from '../api/predict';
 import { streamQuery } from '../api/chat';
 import RiskDashboard from './RiskDashboard';
 
@@ -35,6 +35,7 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
   const [shapData,   setShapData]   = useState({});    // { [modelKey]: shap result }
   const [shapError,  setShapError]  = useState({});    // { [modelKey]: string }
   const [dashboardStats,   setDashboardStats]   = useState(null);
+  const [metricsSummary,   setMetricsSummary]   = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError,   setDashboardError]   = useState('');
 
@@ -42,8 +43,12 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
     setDashboardLoading(true);
     setDashboardError('');
     try {
-      const stats = await fetchDashboardStats();
+      const [stats, metrics] = await Promise.all([
+        fetchDashboardStats(),
+        fetchMetricsSummary(),
+      ]);
       setDashboardStats(stats);
+      setMetricsSummary(metrics);
     } catch (err) {
       setDashboardError(err.message ?? 'Failed to load dashboard stats.');
     } finally {
@@ -261,6 +266,7 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
         result={result}
         inputData={submittedInput}
         dashboardStats={dashboardStats}
+        metricsSummary={metricsSummary}
         loading={dashboardLoading}
         error={dashboardError}
         onRefresh={() => { void loadDashboardStats(); }}

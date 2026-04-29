@@ -10,6 +10,7 @@ import logging
 import os
 import warnings
 from threading import Thread, Event, Semaphore
+from time import perf_counter
 from typing import Generator
 import gc
 
@@ -24,6 +25,8 @@ logging.getLogger("transformers").setLevel(logging.ERROR)
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+
+from observability import add_event, set_trace_section
 
 # Config
 _BASE  = os.path.dirname(__file__)
@@ -196,12 +199,16 @@ def generate(
     user_message: str,
     history: list[dict] | None = None,
     model_name: str | None = None,
+    trace: dict | None = None,
 ) -> str:
     """Return a complete generated answer (blocking)."""
+    wait_started = perf_counter()
     with _gen_lock:
+        queue_wait_ms = round((perf_counter() - wait_started) * 1000, 2)
         tokenizer, model, _ = load_model(model_name)
         input_ids = _build_input_ids(tokenizer, system_prompt, user_message, history)
         input_ids = input_ids.to(next(model.parameters()).device)
+        gen_started = perf_counter()
         with torch.no_grad():
             output_ids = model.generate(
                 input_ids,
@@ -212,6 +219,16 @@ def generate(
                 no_repeat_ngram_size=NO_REPEAT_NGRAM,
                 **_GEN_KWARGS,
             )
+        gen_latency_s = perf_counter() - gen_started
+
+    tokens_out = int(output_ids.shape[-1] - input_ids.shape[-1])
+    set_trace_section(trace, "generation", {
+        "queue_wait_ms": queue_wait_ms,
+        "latency_ms": round(gen_latency_s * 1000, 2),
+        "input_tokens": int(input_ids.shape[-1]),
+        "tokens_out": tokens_out,
+        "tokens_per_sec": round(tokens_out / gen_latency_s, 2) if gen_latency_s > 0 else 0.0,
+    })
 
     new_tokens = output_ids[0][input_ids.shape[-1]:]
     return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
@@ -223,6 +240,7 @@ def generate_stream(
     history: list[dict] | None = None,
     model_name: str | None = None,
     stop_event: Event | None = None,
+    trace: dict | None = None,
 ) -> Generator[str, None, None]:
     """Yield decoded text tokens one-by-one as the model generates them.
 
@@ -235,11 +253,13 @@ def generate_stream(
     stream_state: dict[str, object] = {}
 
     def _run():
+        wait_started = perf_counter()
         acquired = _gen_lock.acquire(blocking=False)
         lock_attempted.set()         # signals that we know our queue status
         if not acquired:
             is_queued.set()          # let the generator yield the queued sentinel
             _gen_lock.acquire()      # block until the previous generation finishes
+        queue_wait_ms = round((perf_counter() - wait_started) * 1000, 2)
         try:
             if stop_event and stop_event.is_set():
                 streamer_ready.set()
@@ -264,12 +284,24 @@ def generate_stream(
             )
 
             if not (stop_event and stop_event.is_set()):
+                gen_started = perf_counter()
                 with torch.inference_mode():
-                    model.generate(**_kwargs)
+                    output_ids = model.generate(**_kwargs)
+                gen_latency_s = perf_counter() - gen_started
+                tokens_out = int(output_ids.shape[-1] - input_ids.shape[-1])
+                set_trace_section(trace, "generation", {
+                    "queue_wait_ms": queue_wait_ms,
+                    "latency_ms": round(gen_latency_s * 1000, 2),
+                    "input_tokens": int(input_ids.shape[-1]),
+                    "tokens_out": tokens_out,
+                    "tokens_per_sec": round(tokens_out / gen_latency_s, 2) if gen_latency_s > 0 else 0.0,
+                })
             else:
+                add_event(trace, "generation_cancelled_before_start")
                 streamer.on_finalized_text("", stream_end=True)
         except Exception as exc:
             stream_state["error"] = exc
+            add_event(trace, "generation_error", {"error": str(exc)})
             streamer_ready.set()
             streamer = stream_state.get("streamer")
             if isinstance(streamer, TextIteratorStreamer):
@@ -296,6 +328,8 @@ def generate_stream(
         if stop_event and stop_event.is_set():
             break
         yield token
-    # Do NOT join — if we broke early the thread keeps running as a daemon
-    # and will be silently killed when the process exits or the next request
-    # starts (since the model is serialised by the caller).
+    if not (stop_event and stop_event.is_set()):
+        thread.join(timeout=2.0)
+    # We only wait for normal completion so trace metrics are available.
+    # After early disconnects the daemon thread may still be unwinding
+    # model.generate while the client is already gone.

@@ -334,7 +334,35 @@ input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer;
 .ctx-list { padding: 4px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
 .ctx-chunk { border-top: 1px solid var(--border); padding-top: 8px; }
 .ctx-num { font-size: .7rem; font-weight: 700; color: var(--accent); text-transform: uppercase; }
+.ctx-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ctx-source {
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-score {
+  margin-left: auto;
+  color: var(--yellow);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
 .ctx-chunk p { color: var(--muted); margin-top: 3px; }
+.ctx-id {
+  display: block;
+  color: var(--muted);
+  opacity: .7;
+  font-size: 0.66rem;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
 
 /* ═══════════════════════════════════════════════════════════════
    INPUT BAR

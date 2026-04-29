@@ -1,3 +1,5 @@
+uvicorn app:app --host 0.0.0.0 --port 8001
+
 ## Data Source Credit risk 
 
 https://www.kaggle.com/datasets/laotse/credit-risk-dataset

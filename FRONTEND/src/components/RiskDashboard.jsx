@@ -93,6 +93,7 @@ export default function RiskDashboard({
   result,
   inputData,
   dashboardStats,
+  metricsSummary,
   loading = false,
   error = '',
   onRefresh,
@@ -138,6 +139,7 @@ export default function RiskDashboard({
 
   const docs = dashboardStats?.documents ?? {};
   const retrieval = dashboardStats?.retrieval ?? {};
+  const metrics = metricsSummary ?? {};
 
   const decisionCounts = useMemo(() => {
     const counts = { APPROVE: 0, REVIEW: 0, REJECT: 0 };
@@ -444,6 +446,22 @@ export default function RiskDashboard({
         <article className="dashboard-kpi-card">
           <span className="dashboard-kpi-label">Documents Indexed</span>
           <strong className="dashboard-kpi-value">{formatCount(docs.total_documents)}</strong>
+        </article>
+        <article className="dashboard-kpi-card">
+          <span className="dashboard-kpi-label">Observed Requests</span>
+          <strong className="dashboard-kpi-value">{formatCount(metrics.window_size)}</strong>
+        </article>
+        <article className="dashboard-kpi-card">
+          <span className="dashboard-kpi-label">P95 Latency</span>
+          <strong className="dashboard-kpi-value">{asNumber(metrics.latency_ms?.p95, 0).toFixed(0)} ms</strong>
+        </article>
+        <article className="dashboard-kpi-card">
+          <span className="dashboard-kpi-label">Generation P50</span>
+          <strong className="dashboard-kpi-value">{asNumber(metrics.generation_latency_ms?.p50, 0).toFixed(0)} ms</strong>
+        </article>
+        <article className="dashboard-kpi-card">
+          <span className="dashboard-kpi-label">Error Rate</span>
+          <strong className="dashboard-kpi-value">{(asNumber(metrics.error_rate, 0) * 100).toFixed(1)}%</strong>
         </article>
       </div>
 

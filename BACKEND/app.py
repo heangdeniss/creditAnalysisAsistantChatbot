@@ -48,6 +48,8 @@ from model_loader import DEFAULT_MODEL, load_model, model_is_loaded, model_is_bu
 from ml_predict import load_all_models, predict as ml_predict, explain_shap
 from chroma_loader import load_chroma_db
 from speech_to_text import transcribe_wav_bytes
+from observability import finish_trace, metrics_summary, recent_traces, start_trace
+from eval.rag_eval import run_eval as run_rag_eval
 
 
 @asynccontextmanager
@@ -93,10 +95,21 @@ class ModelSwitchRequest(BaseModel):
     model: str = Field(..., pattern="^(llama-1b|llama-3b)$")
 
 
+class RetrievedChunk(BaseModel):
+    citation_id: str
+    text:        str
+    snippet:     str
+    source:      str
+    page:        str | int | None = None
+    title:       str | None = None
+    chunk_id:    str
+    score:       float | None = None
+
+
 class QueryResponse(BaseModel):
     question: str
     answer:   str
-    context:  list[str]
+    context:  list[RetrievedChunk]
 
 
 class PredictRequest(BaseModel):
@@ -119,6 +132,12 @@ class IngestRequest(BaseModel):
     source: str = Field(default="api", description="Metadata label stored alongside each passage.")
 
 
+class RagEvalRequest(BaseModel):
+    model:          str        = Field(default="llama-1b", pattern="^(llama-1b|llama-3b)$")
+    retrieval_only: bool       = Field(default=True)
+    cases_path:     str | None = Field(default=None, description="Optional JSONL cases path on the backend host.")
+
+
 # Routes
 @app.get("/health")
 def health() -> dict:
@@ -129,17 +148,54 @@ def health() -> dict:
     return {"status": "ok", "busy": model_is_busy(), "model": current_model_name()}
 
 
+@app.get("/metrics/summary")
+def metrics() -> dict:
+    """Return lightweight in-process observability metrics for recent requests."""
+    return metrics_summary()
+
+
+@app.get("/traces/recent")
+def traces(limit: int = Query(default=25, ge=1, le=250)) -> dict:
+    """Return recent completed request traces."""
+    return {"traces": recent_traces(limit)}
+
+
+@app.post("/eval/rag")
+def eval_rag(body: RagEvalRequest) -> dict:
+    """Run the local RAG eval harness. Defaults to retrieval-only for speed."""
+    try:
+        kwargs = {
+            "model_name": body.model,
+            "retrieval_only": body.retrieval_only,
+        }
+        if body.cases_path:
+            kwargs["cases_path"] = body.cases_path
+        return run_rag_eval(**kwargs)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.post("/query", response_model=QueryResponse)
 def query(body: QueryRequest) -> dict:
     history = [m.model_dump() for m in body.history] or None
+    trace = start_trace(
+        "/query",
+        model=body.model,
+        question=body.question,
+        facts_present=bool(body.facts),
+    )
     try:
-        return rag_query(
+        result = rag_query(
             question=body.question.strip(),
             facts=body.facts,
             history=history,
             model_name=body.model,
+            trace=trace,
         )
+        finish_trace(trace, status="ok")
+        return result
     except Exception as exc:
+        finish_trace(trace, status="error", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -147,6 +203,12 @@ def query(body: QueryRequest) -> dict:
 async def stream(body: QueryRequest, request: Request) -> StreamingResponse:
     history    = [m.model_dump() for m in body.history] or None
     stop_event = Event()
+    trace = start_trace(
+        "/stream",
+        model=body.model,
+        question=body.question,
+        facts_present=bool(body.facts),
+    )
 
     sync_gen = rag_stream(
         question=body.question.strip(),
@@ -154,6 +216,7 @@ async def stream(body: QueryRequest, request: Request) -> StreamingResponse:
         history=history,
         model_name=body.model,
         stop_event=stop_event,
+        trace=trace,
     )
 
     async def event_stream():

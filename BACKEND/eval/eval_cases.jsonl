@@ -1,0 +1,3 @@
+{"id":"credit_risk_factors","question":"What borrower factors usually increase credit default risk?","expected_keywords":["income","interest","default"],"expected_sources":[],"forbidden_phrases":["guaranteed approval"],"should_abstain":false}
+{"id":"loan_to_income","question":"Why does a high loan amount compared with income matter for credit risk?","expected_keywords":["income","loan","risk"],"expected_sources":[],"forbidden_phrases":["guaranteed"],"should_abstain":false}
+{"id":"unknown_internal_policy","question":"What is the private approval rule used by the bank's secret 2027 committee?","expected_keywords":[],"expected_sources":[],"forbidden_phrases":["secret 2027 committee"],"should_abstain":true}

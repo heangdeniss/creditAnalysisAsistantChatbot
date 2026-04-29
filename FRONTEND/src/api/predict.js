@@ -98,3 +98,33 @@ export async function fetchDashboardStats(limit = 1500) {
     clearTimeout(timer);
   }
 }
+
+/**
+ * Fetch recent backend observability metrics.
+ *
+ * @returns {Promise<object>} summary from /metrics/summary
+ */
+export async function fetchMetricsSummary() {
+  const controller = new AbortController();
+  const timer = _timeout(30_000, controller);
+
+  try {
+    const res = await fetch(`${API}/metrics/summary`, {
+      method:  'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal:  controller.signal,
+    });
+
+    if (!res.ok) {
+      const { detail } = await res.json().catch(() => ({}));
+      throw new Error(detail ?? res.statusText);
+    }
+
+    return res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Metrics request timed out (30 s).');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}

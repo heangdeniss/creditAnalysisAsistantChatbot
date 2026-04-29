@@ -50,6 +50,7 @@ export async function streamQuery(question, cbs = {}, { signal: externalSignal, 
             if (msg.type === 'context') cbs.onContext?.(msg.chunks);
             if (msg.type === 'token')   cbs.onToken?.(msg.text);
             if (msg.type === 'queued')  cbs.onQueued?.();
+            if (msg.type === 'error')   cbs.onError?.(new Error(msg.message || 'Stream failed.'));
             if (msg.type === 'done')    cbs.onDone?.();
           } catch { /* skip malformed */ }
         }
@@ -67,6 +68,7 @@ export async function streamQuery(question, cbs = {}, { signal: externalSignal, 
           if (msg.type === 'context') cbs.onContext?.(msg.chunks);
           if (msg.type === 'token')   cbs.onToken?.(msg.text);
           if (msg.type === 'queued')  cbs.onQueued?.();
+          if (msg.type === 'error')   cbs.onError?.(new Error(msg.message || 'Stream failed.'));
           if (msg.type === 'done')    cbs.onDone?.();
         } catch { /* skip malformed */ }
       }

@@ -1,40 +1,71 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+function normalizeChunk(chunk, index) {
+  if (typeof chunk === 'string') {
+    return {
+      citation_id: `S${index + 1}`,
+      source: `Chunk ${index + 1}`,
+      page: null,
+      score: null,
+      snippet: chunk,
+      text: chunk,
+      title: '',
+      chunk_id: '',
+    };
+  }
+  return {
+    citation_id: chunk.citation_id ?? `S${index + 1}`,
+    source: chunk.source ?? 'knowledge-base',
+    page: chunk.page ?? null,
+    score: chunk.score ?? null,
+    snippet: chunk.snippet ?? chunk.text ?? '',
+    text: chunk.text ?? chunk.snippet ?? '',
+    title: chunk.title ?? '',
+    chunk_id: chunk.chunk_id ?? '',
+  };
+}
+
 export default function MessageBubble({ msg, showContext }) {
   const isUser = msg.role === 'user';
+  const chunks = (msg.context ?? []).map(normalizeChunk);
 
   return (
     <div className={`msg msg-${isUser ? 'user' : 'bot'}`}>
-      <div className="avatar">{isUser ? '👤' : '🦙'}</div>
+      <div className="avatar">{isUser ? 'You' : 'AI'}</div>
 
       <div className="bubble-wrap">
         <div className="bubble">
           {msg.loading ? (
-            msg.queued ? <span className="queued-msg">⏳ Waiting for model…</span> : <Dots />
+            msg.queued ? <span className="queued-msg">Waiting for model...</span> : <Dots />
           ) : isUser ? (
             <p>{msg.content}</p>
           ) : (
             <>
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-              {/* Blinking cursor while streaming */}
-          {msg.streaming === true && <span className="cursor" />}
+              {msg.streaming === true && <span className="cursor" />}
             </>
           )}
         </div>
 
         {msg.stopped && !isUser && (
-          <span className="stopped-msg">⛔ Stopped</span>
+          <span className="stopped-msg">Stopped</span>
         )}
 
-        {showContext && msg.context?.length > 0 && (
+        {showContext && chunks.length > 0 && (
           <details className="ctx">
-            <summary>📄 {msg.context.length} chunk{msg.context.length > 1 ? 's' : ''} retrieved</summary>
+            <summary>{chunks.length} cited source{chunks.length > 1 ? 's' : ''} retrieved</summary>
             <div className="ctx-list">
-              {msg.context.map((c, i) => (
+              {chunks.map((c, i) => (
                 <div key={i} className="ctx-chunk">
-                  <span className="ctx-num">#{i + 1}</span>
-                  <p>{c.length > 400 ? c.slice(0, 400) + '…' : c}</p>
+                  <div className="ctx-meta-row">
+                    <span className="ctx-num">[{c.citation_id}]</span>
+                    <span className="ctx-source">
+                      Knowledge base source{c.page !== null ? `, page ${c.page}` : ''}
+                    </span>
+                    {typeof c.score === 'number' && <span className="ctx-score">{c.score.toFixed(3)}</span>}
+                  </div>
+                  <p>{c.snippet.length > 400 ? `${c.snippet.slice(0, 400)}...` : c.snippet}</p>
                 </div>
               ))}
             </div>
