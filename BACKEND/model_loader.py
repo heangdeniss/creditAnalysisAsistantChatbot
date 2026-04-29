@@ -88,7 +88,12 @@ def current_model_name() -> str:
 
 
 def _build_device_map(model_path: str):
-    """Create an approximate llama.cpp-like GPU layer split for Transformers."""
+    """Build a safe device map for Transformers loading.
+
+    Note: a handcrafted CUDA/CPU split can trigger cross-device attention
+    failures on larger checkpoints (e.g. llama-3b). For mixed placement,
+    prefer Accelerate's built-in 'auto' dispatcher.
+    """
     if DEVICE != "cuda":
         return "auto"
 
@@ -104,14 +109,8 @@ def _build_device_map(model_path: str):
     if n_gpu >= num_layers:
         return "auto"
 
-    device_map: dict[str, str] = {
-        "model.embed_tokens": "cuda:0",
-        "model.norm": "cpu",
-        "lm_head": "cpu",
-    }
-    for i in range(num_layers):
-        device_map[f"model.layers.{i}"] = "cuda:0" if i < n_gpu else "cpu"
-    return device_map
+    # Mixed placement requested: rely on Accelerate auto-partitioning.
+    return "auto"
 
 
 def load_model(model_name: str | None = None) -> tuple[AutoTokenizer, AutoModelForCausalLM, str]:
@@ -135,10 +134,14 @@ def load_model(model_name: str | None = None) -> tuple[AutoTokenizer, AutoModelF
 
     model_path = MODEL_PATHS[selected]
     device_map = _build_device_map(model_path)
+
+    force_cpu = isinstance(device_map, dict) and device_map.get("") == "cpu"
+    torch_dtype = torch.float16 if DEVICE == "cuda" and not force_cpu else torch.float32
+
     _tokenizer = AutoTokenizer.from_pretrained(model_path)
     _model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        torch_dtype=torch.float16 if DEVICE == "cuda" else torch.float32,
+        torch_dtype=torch_dtype,
         device_map=device_map,
         low_cpu_mem_usage=True,
     )
@@ -180,11 +183,11 @@ def _build_input_ids(
 
 
 # Generation constants (fixed — not configurable from outside)
-MAX_NEW_TOKENS:      int   = 512
-TEMPERATURE:         float = 0.3
-TOP_P:               float = 0.1
-REPETITION_PENALTY: float = 1.3   # >1 penalises already-generated tokens
-NO_REPEAT_NGRAM:     int   = 4    # blocks any 4-gram from repeating
+MAX_NEW_TOKENS:      int   = 256  #512 is overkill for 1B params
+TEMPERATURE:         float = 0.7  # More Creative 0.3 is too stiff
+TOP_P:               float = 0.9  # 0.1 is too restriction 
+REPETITION_PENALTY: float = 1.1   # >1 penalises already-generated tokens
+NO_REPEAT_NGRAM:     int   = 3    # blocks any 3-gram from repeating
 QUEUED_SENTINEL:     str   = "\x00QUEUED\x00"  # never appears in real LLM output
 
 
