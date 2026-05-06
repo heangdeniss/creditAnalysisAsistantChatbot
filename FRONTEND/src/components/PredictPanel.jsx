@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { predict, explainShap, fetchDashboardStats, fetchMetricsSummary } from '../api/predict';
 import { streamQuery } from '../api/chat';
 import RiskDashboard from './RiskDashboard';
+import ScenarioPanel from './ScenarioPanel';
 
 const INIT = {
   person_age:                 '',
@@ -261,6 +262,8 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
         </div>
 
       </div>
+
+      <ScenarioPanel baseApplicant={submittedInput} />
 
       <RiskDashboard
         result={result}

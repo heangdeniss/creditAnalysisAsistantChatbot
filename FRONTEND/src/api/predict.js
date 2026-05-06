@@ -36,6 +36,47 @@ export async function predict(data) {
 }
 
 /**
+ * Score a baseline borrower plus saved what-if scenarios.
+ *
+ * @param {object} baseApplicant  Raw borrower features
+ * @param {Array<object>} scenarios  [{ scenario_id, name, ...overrides }]
+ * @param {object} options  { includeTopDrivers, driversModel }
+ * @returns {Promise<object>}  { baseline, scenarios, field_notes }
+ */
+export async function simulateScenarios(baseApplicant, scenarios, options = {}) {
+  const controller = new AbortController();
+  const timer = _timeout(30_000, controller);
+
+  const body = {
+    base_applicant: baseApplicant,
+    scenarios,
+    include_top_drivers: Boolean(options.includeTopDrivers),
+    drivers_model: options.driversModel ?? 'catboost',
+  };
+
+  try {
+    const res = await fetch(`${API}/scenario`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal:  controller.signal,
+      body:    JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const { detail } = await res.json().catch(() => ({}));
+      throw new Error(Array.isArray(detail) ? detail.map(d => d.msg).join('; ') : detail ?? res.statusText);
+    }
+
+    return res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Scenario simulation timed out (30 s).');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Fetch SHAP feature attributions for one borrower from the chosen model.
  *
  * @param {object} data   Borrower features (same shape as predict())

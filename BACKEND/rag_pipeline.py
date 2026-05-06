@@ -33,11 +33,9 @@ _SOURCE_PATH_RE = re.compile(
 RAG_SYSTEM_PROMPT = (
     "You are a professional credit risk assistant. "
     "Answer the question using only the context provided. Be concise and stop when done — do not add extra sections, conclusions, or additional information. "
-    "When you use a retrieved source, cite it with its bracketed source id such as [S1] or [S2]. "
-    "Only cite source ids that appear in the provided context. "
     "Do not mention source file names, file paths, folders, PDFs, text files, or training files in the answer. "
     "Format rules:\n"
-    "- Plain English only. No jargon.\n"     
+    "- Plain English only. No jargon.\n"
     "- Use '- ' (dash space) for bullet points. Never use * or • as bullets.\n"
     "- Every bullet must contain a complete sentence. No empty bullets.\n"
     "- Do not use asterisks (*) anywhere.\n"
@@ -180,12 +178,13 @@ def _citation_suffix(answer: str, chunks: list[dict]) -> str:
         return ""
     if _CITATION_RE.search(answer):
         return ""
-    return f" [{chunks[0]['citation_id']}]"
+    return ""
 
 
 def _postprocess_cited_answer(answer: str, chunks: list[dict]) -> str:
     cleaned = re.sub(r"(?m)^\s*\*\s+", "- ", answer).strip()
     cleaned = _SOURCE_PATH_RE.sub("the knowledge base", cleaned)
+    cleaned = _CITATION_RE.sub("", cleaned).replace("  ", " ").strip()
     return f"{cleaned}{_citation_suffix(cleaned, chunks)}"
 
 

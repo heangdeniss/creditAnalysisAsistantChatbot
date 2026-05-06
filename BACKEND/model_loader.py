@@ -185,7 +185,7 @@ def _build_input_ids(
     )
 
 
-# Generation constants (fixed — not configurable from outside)
+# Generation constants
 MAX_NEW_TOKENS:      int   = 256  #512 is overkill for 1B params
 TEMPERATURE:         float = 0.7  # More Creative 0.3 is too stiff
 TOP_P:               float = 0.9  # 0.1 is too restriction 

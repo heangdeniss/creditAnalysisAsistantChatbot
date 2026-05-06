@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -19,12 +20,38 @@ from typing import Any
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
-from rag_pipeline import NO_INFO, rag_query, _retrieve_citations  # noqa: E402
-from observability import finish_trace, start_trace  # noqa: E402
-
 
 DEFAULT_CASES = Path(__file__).with_name("eval_cases.jsonl")
 REPORT_DIR = Path(__file__).with_name("reports")
+
+
+def configure_runtime(*, force_cpu: bool) -> None:
+    """Apply safe runtime defaults before importing heavy ML modules."""
+    os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+    os.environ.setdefault("USE_TF", "0")
+    os.environ.setdefault("USE_TORCH", "1")
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+    if force_cpu:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        os.environ["FORCE_CPU"] = "1"
+
+
+def _load_rag_dependencies():
+    from rag_pipeline import NO_INFO, rag_query, _retrieve_citations
+
+    return NO_INFO, rag_query, _retrieve_citations
+
+
+def _load_trace_helpers():
+    from observability import finish_trace, start_trace
+
+    return start_trace, finish_trace
 
 
 def load_eval_cases(path: str | Path = DEFAULT_CASES) -> list[dict[str, Any]]:
@@ -64,13 +91,13 @@ def _source_hit(chunks: list[dict], expected_sources: list[str]) -> bool:
     return any(str(src).lower() in sources for src in expected_sources)
 
 
-def _abstained(answer: str, chunks: list[dict]) -> bool:
+def _abstained(answer: str, chunks: list[dict], no_info: str) -> bool:
     if not chunks:
         return True
-    return NO_INFO.lower() in answer.lower()
+    return no_info.lower() in answer.lower()
 
 
-def score_case(case: dict[str, Any], answer: str, chunks: list[dict]) -> dict[str, Any]:
+def score_case(case: dict[str, Any], answer: str, chunks: list[dict], no_info: str) -> dict[str, Any]:
     expected_keywords = list(case.get("expected_keywords") or [])
     expected_sources = list(case.get("expected_sources") or [])
     forbidden_phrases = list(case.get("forbidden_phrases") or [])
@@ -79,7 +106,7 @@ def score_case(case: dict[str, Any], answer: str, chunks: list[dict]) -> dict[st
     keyword_recall = _keyword_recall(answer, expected_keywords)
     retrieval_hit = True if should_abstain else _source_hit(chunks, expected_sources)
     forbidden_hit = _contains_any(answer, forbidden_phrases)
-    abstention_ok = _abstained(answer, chunks) if should_abstain else not _abstained(answer, chunks)
+    abstention_ok = _abstained(answer, chunks, no_info) if should_abstain else not _abstained(answer, chunks, no_info)
 
     passed = (
         keyword_recall >= float(case.get("min_keyword_recall", 0.67))
@@ -103,21 +130,23 @@ def run_eval_case(
     model_name: str,
     retrieval_only: bool = False,
 ) -> dict[str, Any]:
+    no_info, rag_query, retrieve_citations = _load_rag_dependencies()
+    start_trace, finish_trace = _load_trace_helpers()
     question = str(case["question"])
     trace = start_trace("/eval/rag", model=model_name, question=question)
     started = perf_counter()
 
     chunks: list[dict] = []
     if retrieval_only:
-        chunks = _retrieve_citations(question, trace=trace)
-        answer = " ".join(str(c.get("text", "")) for c in chunks) if chunks else NO_INFO
+        chunks = retrieve_citations(question, trace=trace)
+        answer = " ".join(str(c.get("text", "")) for c in chunks) if chunks else no_info
     else:
         result = rag_query(question=question, model_name=model_name, trace=trace)
         chunks = list(result.get("context") or chunks)
         answer = str(result.get("answer", ""))
 
     latency_ms = round((perf_counter() - started) * 1000, 2)
-    scores = score_case(case, answer, chunks)
+    scores = score_case(case, answer, chunks, no_info)
     finish_trace(trace, status="ok")
 
     return {
@@ -197,8 +226,15 @@ def main() -> int:
     parser.add_argument("--cases", default=str(DEFAULT_CASES), help="Path to JSONL eval cases.")
     parser.add_argument("--model", default="llama-1b", choices=["llama-1b", "llama-3b"])
     parser.add_argument("--retrieval-only", action="store_true", help="Skip LLM generation for a fast retrieval check.")
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Allow CUDA if available (may crash on incompatible drivers).",
+    )
     parser.add_argument("--output", default="", help="Optional JSON report path.")
     args = parser.parse_args()
+
+    configure_runtime(force_cpu=not args.gpu)
 
     report = run_eval(cases_path=args.cases, model_name=args.model, retrieval_only=args.retrieval_only)
     output = write_eval_report(report, args.output or None)

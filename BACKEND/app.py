@@ -1,7 +1,7 @@
 """
 app.py
 FastAPI backend — routes: GET /health, POST /query, POST /stream,
-                           POST /predict, POST /ingest.
+                           POST /predict, POST /scenario, POST /ingest.
 Generation settings (temperature, top_p, max_new_tokens) are fixed in
 model_loader.py and are NOT accepted or forwarded from the frontend.
 
@@ -35,7 +35,7 @@ from threading import Event
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rag_pipeline import (
     SCORE_THRESHOLD,
     TOP_K,
@@ -113,6 +113,8 @@ class QueryResponse(BaseModel):
 
 
 class PredictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     person_age:                 float = Field(..., ge=18,  le=100)
     person_income:              float = Field(..., ge=0)
     person_home_ownership:      str   = Field(..., pattern="^(MORTGAGE|OWN|RENT|OTHER)$")
@@ -122,6 +124,45 @@ class PredictRequest(BaseModel):
     loan_int_rate:              float = Field(..., ge=1,   le=40)
     cb_person_default_on_file:  str   = Field(..., pattern="^(Y|N)$")
     cb_person_cred_hist_length: float = Field(..., ge=0,   le=60)
+
+
+class ScenarioOverride(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: str | None = Field(default=None, min_length=1, max_length=80)
+    name:        str        = Field(..., min_length=1, max_length=120)
+
+    person_age:                 float | None = Field(default=None, ge=18,  le=100)
+    person_income:              float | None = Field(default=None, ge=0)
+    person_home_ownership:      str | None   = Field(default=None, pattern="^(MORTGAGE|OWN|RENT|OTHER)$")
+    person_emp_length:          float | None = Field(default=None, ge=0,   le=60)
+    loan_intent:                str | None   = Field(default=None, pattern="^(DEBTCONSOLIDATION|EDUCATION|HOMEIMPROVEMENT|MEDICAL|PERSONAL|VENTURE)$")
+    loan_amnt:                  float | None = Field(default=None, ge=500)
+    loan_int_rate:              float | None = Field(default=None, ge=1,   le=40)
+    cb_person_default_on_file:  str | None   = Field(default=None, pattern="^(Y|N)$")
+    cb_person_cred_hist_length: float | None = Field(default=None, ge=0,   le=60)
+
+    @model_validator(mode="after")
+    def require_at_least_one_change(self) -> "ScenarioOverride":
+        changed = self.model_dump(
+            exclude={"scenario_id", "name"},
+            exclude_none=True,
+        )
+        if not changed:
+            raise ValueError("Scenario must override at least one applicant field.")
+        return self
+
+
+class ScenarioSimulationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_applicant: PredictRequest
+    scenarios: list[ScenarioOverride] = Field(..., min_length=1, max_length=20)
+    include_top_drivers: bool = Field(default=False)
+    drivers_model: str = Field(
+        default="catboost",
+        pattern="^(catboost|logistic_regression|neural_network)$",
+    )
 
 
 class IngestRequest(BaseModel):
@@ -136,6 +177,87 @@ class RagEvalRequest(BaseModel):
     model:          str        = Field(default="llama-1b", pattern="^(llama-1b|llama-3b)$")
     retrieval_only: bool       = Field(default=True)
     cases_path:     str | None = Field(default=None, description="Optional JSONL cases path on the backend host.")
+
+
+def _derived_applicant_metrics(applicant: dict) -> dict:
+    """Return local derived metrics that are useful for scenario comparison."""
+    income = float(applicant.get("person_income") or 0)
+    loan_amount = float(applicant.get("loan_amnt") or 0)
+    loan_to_income_pct = None
+    if income > 0:
+        loan_to_income_pct = round((loan_amount / income) * 100, 2)
+    return {
+        "loan_to_income_pct": loan_to_income_pct,
+    }
+
+
+def _prediction_delta(baseline: dict | None, scenario: dict | None) -> dict | None:
+    """Compare two model prediction rows returned by ml_predict.predict()."""
+    if not baseline or not scenario:
+        return None
+    if baseline.get("error") or scenario.get("error"):
+        return {
+            "status": "error",
+            "baseline_error": baseline.get("error"),
+            "scenario_error": scenario.get("error"),
+        }
+    if "probability" not in baseline or "probability" not in scenario:
+        return None
+
+    baseline_probability = float(baseline["probability"])
+    scenario_probability = float(scenario["probability"])
+    probability_delta = round(scenario_probability - baseline_probability, 2)
+    relative_delta_pct = None
+    if baseline_probability != 0:
+        relative_delta_pct = round((probability_delta / baseline_probability) * 100, 2)
+
+    return {
+        "status": "ok",
+        "probability_delta": probability_delta,
+        "relative_probability_delta_pct": relative_delta_pct,
+        "decision_changed": baseline.get("decision") != scenario.get("decision"),
+        "grade_changed": baseline.get("grade") != scenario.get("grade"),
+        "label_changed": baseline.get("label") != scenario.get("label"),
+    }
+
+
+def _score_deltas(baseline_scores: dict, scenario_scores: dict) -> dict:
+    """Return per-model deltas for all models present in either score dict."""
+    model_names = sorted(set(baseline_scores) | set(scenario_scores))
+    return {
+        model_name: _prediction_delta(
+            baseline_scores.get(model_name),
+            scenario_scores.get(model_name),
+        )
+        for model_name in model_names
+    }
+
+
+def _top_driver_summary(applicant: dict, model_name: str, limit: int = 5) -> dict:
+    """Best-effort local SHAP summary; failures are reported without blocking scoring."""
+    try:
+        explanation = explain_shap(applicant, model_name)
+        drivers = []
+        for row in explanation.get("shap_values", [])[:limit]:
+            shap_value = float(row.get("shap_value", 0.0))
+            drivers.append({
+                "feature": row.get("feature"),
+                "display_name": row.get("display_name"),
+                "raw_value": row.get("raw_value"),
+                "shap_value": round(shap_value, 6),
+                "direction": "risk_up" if shap_value > 0 else "risk_down",
+            })
+        return {
+            "model": model_name,
+            "drivers": drivers,
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "model": model_name,
+            "drivers": [],
+            "error": str(exc),
+        }
 
 
 # Routes
@@ -272,6 +394,56 @@ def predict(body: PredictRequest) -> dict:
     """Run all available ML models and return credit-risk predictions."""
     try:
         return ml_predict(body.model_dump())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/scenario")
+def simulate_scenarios(body: ScenarioSimulationRequest) -> dict:
+    """Score a baseline applicant plus locally evaluated what-if scenarios."""
+    try:
+        baseline_input = body.base_applicant.model_dump()
+        baseline_scores = ml_predict(baseline_input)
+        baseline = {
+            "input": baseline_input,
+            "derived_metrics": _derived_applicant_metrics(baseline_input),
+            "scores": baseline_scores,
+        }
+        if body.include_top_drivers:
+            baseline["top_drivers"] = _top_driver_summary(baseline_input, body.drivers_model)
+
+        scenarios = []
+        for scenario in body.scenarios:
+            overrides = scenario.model_dump(
+                exclude={"scenario_id", "name"},
+                exclude_none=True,
+            )
+            candidate_input = {**baseline_input, **overrides}
+            validated_input = PredictRequest.model_validate(candidate_input).model_dump()
+            scenario_scores = ml_predict(validated_input)
+
+            item = {
+                "scenario_id": scenario.scenario_id,
+                "name": scenario.name,
+                "overrides": overrides,
+                "input": validated_input,
+                "derived_metrics": _derived_applicant_metrics(validated_input),
+                "scores": scenario_scores,
+                "deltas": _score_deltas(baseline_scores, scenario_scores),
+            }
+            if body.include_top_drivers:
+                item["top_drivers"] = _top_driver_summary(validated_input, body.drivers_model)
+            scenarios.append(item)
+
+        return {
+            "baseline": baseline,
+            "scenarios": scenarios,
+            "field_notes": {
+                "supported_inputs": list(PredictRequest.model_fields.keys()),
+                "derived_only": ["loan_to_income_pct"],
+                "unsupported_without_model_retraining": ["ltv", "dti", "debt"],
+            },
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

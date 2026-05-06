@@ -2,6 +2,7 @@ uvicorn app:app --host 0.0.0.0 --port 8001
 
 ## Data Source Credit risk 
 
+https://github.com/MrJay10/banking-faq-bot/blob/master/BankFAQs.csv
 https://www.kaggle.com/datasets/laotse/credit-risk-dataset
 
 
