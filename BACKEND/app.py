@@ -37,16 +37,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rag_pipeline import (
-    SCORE_THRESHOLD,
-    TOP_K,
     get_retriever,
     rag_query,
     rag_stream,
+    retrieval_settings,
     retriever_is_loaded,
 )
 from model_loader import DEFAULT_MODEL, load_model, model_is_loaded, model_is_busy, current_model_name, switch_model
 from ml_predict import load_all_models, predict as ml_predict, explain_shap
-from chroma_loader import load_chroma_db
+from chroma_loader import chunk_texts, load_chroma_db
 from speech_to_text import transcribe_wav_bytes
 from observability import finish_trace, metrics_summary, recent_traces, start_trace
 from eval.rag_eval import run_eval as run_rag_eval
@@ -97,6 +96,7 @@ class ModelSwitchRequest(BaseModel):
 
 class RetrievedChunk(BaseModel):
     citation_id: str
+    document_id: str | None = None
     text:        str
     snippet:     str
     source:      str
@@ -177,6 +177,9 @@ class RagEvalRequest(BaseModel):
     model:          str        = Field(default="llama-1b", pattern="^(llama-1b|llama-3b)$")
     retrieval_only: bool       = Field(default=True)
     cases_path:     str | None = Field(default=None, description="Optional JSONL cases path on the backend host.")
+    top_k:          int | None  = Field(default=None, ge=1, le=25)
+    score_threshold: float | None = Field(default=None, ge=0, le=1)
+    ablation:       bool       = Field(default=False, description="Compare default retrieval settings against a broader retrieval set.")
 
 
 def _derived_applicant_metrics(applicant: dict) -> dict:
@@ -289,7 +292,12 @@ def eval_rag(body: RagEvalRequest) -> dict:
         kwargs = {
             "model_name": body.model,
             "retrieval_only": body.retrieval_only,
+            "ablation": body.ablation,
         }
+        if body.top_k is not None:
+            kwargs["top_k"] = body.top_k
+        if body.score_threshold is not None:
+            kwargs["score_threshold"] = body.score_threshold
         if body.cases_path:
             kwargs["cases_path"] = body.cases_path
         return run_rag_eval(**kwargs)
@@ -493,7 +501,7 @@ def dashboard_stats(
                     "source_distribution": source_distribution,
                     "length_buckets": length_buckets,
                 },
-                "retrieval": {"top_k": TOP_K, "score_threshold": SCORE_THRESHOLD},
+                "retrieval": retrieval_settings(),
             }
 
         payload = collection.get(limit=sample_size, include=["documents", "metadatas"])
@@ -545,8 +553,7 @@ def dashboard_stats(
                 "length_buckets": length_buckets,
             },
             "retrieval": {
-                "top_k": TOP_K,
-                "score_threshold": SCORE_THRESHOLD,
+                **retrieval_settings(),
             },
         }
     except Exception as exc:
@@ -564,9 +571,18 @@ def ingest(body: IngestRequest, request: Request) -> dict:
             raise HTTPException(status_code=403, detail="Invalid or missing X-API-Key header.")
     try:
         db = load_chroma_db()
-        metadatas = [{"source": body.source}] * len(body.texts)
-        ids = db.add_texts(texts=body.texts, metadatas=metadatas)
-        return {"added": len(ids), "ids": ids}
+        chunks, metadatas = chunk_texts(body.texts, source=body.source)
+        if not chunks:
+            raise HTTPException(status_code=400, detail="No non-empty text chunks to ingest.")
+        ids = db.add_texts(texts=chunks, metadatas=metadatas)
+        return {
+            "added": len(ids),
+            "ids": ids,
+            "chunk_size": retrieval_settings()["chunk_size"],
+            "chunk_overlap": retrieval_settings()["chunk_overlap"],
+        }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

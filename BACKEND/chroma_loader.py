@@ -18,10 +18,25 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # Config
+def _env_int(*names: str, default: int, minimum: int = 0) -> int:
+    for name in names:
+        raw = os.getenv(name)
+        if raw not in (None, ""):
+            try:
+                return max(minimum, int(raw))
+            except ValueError:
+                return default
+    return default
+
+
 _BASE        = os.path.dirname(__file__)
 CHROMA_DIR   = os.path.join(_BASE, "..", "chroma_db")
 COLLECTION   = "credit_risk_corpus"
 EMBED_MODEL  = "intfloat/multilingual-e5-base"
+CHUNK_SIZE   = _env_int("RAG_CHUNK_SIZE", "CHUNK_SIZE", default=800, minimum=100)
+CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", "CHUNK_OVERLAP", default=120)
+if CHUNK_OVERLAP >= CHUNK_SIZE:
+    CHUNK_OVERLAP = max(0, CHUNK_SIZE // 5)
 
 # Singletons
 _embedding: HuggingFaceEmbeddings | None = None
@@ -55,3 +70,37 @@ def load_chroma_db() -> Chroma:
         persist_directory=CHROMA_DIR,
     )
     return _db
+
+
+def chunk_texts(texts: list[str], source: str = "api") -> tuple[list[str], list[dict]]:
+    """Split incoming texts using configurable local chunk settings."""
+    chunks: list[str] = []
+    metadatas: list[dict] = []
+    step = max(1, CHUNK_SIZE - CHUNK_OVERLAP)
+
+    for doc_idx, raw_text in enumerate(texts, start=1):
+        text = str(raw_text or "").strip()
+        if not text:
+            continue
+
+        document_id = f"{source}:{doc_idx}"
+        start = 0
+        chunk_idx = 1
+        while start < len(text):
+            end = min(len(text), start + CHUNK_SIZE)
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+                metadatas.append({
+                    "source": source,
+                    "document_id": document_id,
+                    "chunk_id": f"{document_id}:chunk_{chunk_idx}",
+                    "chunk_start": start,
+                    "chunk_end": end,
+                })
+                chunk_idx += 1
+            if end >= len(text):
+                break
+            start += step
+
+    return chunks, metadatas

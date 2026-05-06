@@ -15,14 +15,38 @@ from typing import Generator
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from chroma_loader import load_chroma_db
+from chroma_loader import CHUNK_OVERLAP, CHUNK_SIZE, load_chroma_db
 from model_loader import generate, generate_stream, QUEUED_SENTINEL
 from observability import add_event, finish_trace, set_trace_section
 
 # Config
-TOP_K           = 4
-SCORE_THRESHOLD = float(os.getenv("SCORE_THRESHOLD", "0.45"))
-NO_INFO         = "I don't have enough information in my knowledge base to answer that."
+def _env_int(*names: str, default: int, minimum: int = 1) -> int:
+    for name in names:
+        raw = os.getenv(name)
+        if raw not in (None, ""):
+            try:
+                return max(minimum, int(raw))
+            except ValueError:
+                return default
+    return default
+
+
+def _env_float(*names: str, default: float) -> float:
+    for name in names:
+        raw = os.getenv(name)
+        if raw not in (None, ""):
+            try:
+                return float(raw)
+            except ValueError:
+                return default
+    return default
+
+
+TOP_K                = _env_int("RAG_TOP_K", "TOP_K", default=4)
+SCORE_THRESHOLD      = _env_float("RAG_SCORE_THRESHOLD", "SCORE_THRESHOLD", default=0.45)
+MIN_EVIDENCE_RESULTS = _env_int("RAG_MIN_EVIDENCE_RESULTS", default=1)
+MIN_EVIDENCE_SCORE   = _env_float("RAG_MIN_EVIDENCE_SCORE", default=SCORE_THRESHOLD)
+NO_INFO              = "I don't have enough information in my knowledge base to answer that."
 _CITATION_RE    = re.compile(r"\[S\d+\]")
 _SOURCE_PATH_RE = re.compile(
     r"(?:[\w .-]+[\\/])+[\w .()-]+\.(?:pdf|txt|csv|docx?|xlsx?|json|jsonl|md)",
@@ -82,6 +106,18 @@ def retriever_is_loaded() -> bool:
     return _retriever is not None
 
 
+def retrieval_settings() -> dict:
+    """Return active local retrieval/chunking settings for diagnostics and evals."""
+    return {
+        "top_k": TOP_K,
+        "score_threshold": SCORE_THRESHOLD,
+        "min_evidence_results": MIN_EVIDENCE_RESULTS,
+        "min_evidence_score": MIN_EVIDENCE_SCORE,
+        "chunk_size": CHUNK_SIZE,
+        "chunk_overlap": CHUNK_OVERLAP,
+    }
+
+
 def get_retriever():
     global _retriever
     if _retriever is None:
@@ -101,19 +137,28 @@ def _metadata_value(metadata: dict, *keys: str):
     return None
 
 
+def _document_id(metadata: dict, source: str) -> str:
+    explicit = _metadata_value(metadata, "document_id", "doc_id", "document", "source_id")
+    if explicit:
+        return str(explicit)
+    return os.path.basename(source) or source or "knowledge-base"
+
+
 def _citation_from_doc(doc, index: int, score: float | None = None) -> dict:
     metadata = doc.metadata if isinstance(getattr(doc, "metadata", None), dict) else {}
     text = str(getattr(doc, "page_content", "") or "")
     source = str(_metadata_value(metadata, "source", "file_name", "filename", "path") or "knowledge-base")
+    document_id = _document_id(metadata, source)
     page = _metadata_value(metadata, "page", "page_number")
     title = _metadata_value(metadata, "title", "document_title")
     chunk_id = _metadata_value(metadata, "chunk_id", "id")
     if not chunk_id:
         page_part = page if page is not None else "na"
-        chunk_id = f"{source}:{page_part}:{index}"
+        chunk_id = f"{document_id}:{page_part}:{index}"
 
     return {
         "citation_id": f"S{index}",
+        "document_id": document_id,
         "text": text,
         "snippet": text[:600],
         "source": source,
@@ -124,35 +169,56 @@ def _citation_from_doc(doc, index: int, score: float | None = None) -> dict:
     }
 
 
-def _retrieve_citations(question: str, trace: dict | None = None) -> list[dict]:
+def _retrieve_citations(
+    question: str,
+    trace: dict | None = None,
+    *,
+    top_k: int | None = None,
+    score_threshold: float | None = None,
+) -> list[dict]:
     """Retrieve chunks with metadata and relevance scores when available."""
     started = perf_counter()
+    effective_top_k = max(1, int(top_k or TOP_K))
+    effective_threshold = SCORE_THRESHOLD if score_threshold is None else float(score_threshold)
     db = load_chroma_db()
     pairs = []
     try:
         pairs = db.similarity_search_with_relevance_scores(
             question,
-            k=TOP_K,
-            score_threshold=SCORE_THRESHOLD,
+            k=effective_top_k,
+            score_threshold=effective_threshold,
         )
     except TypeError:
-        pairs = db.similarity_search_with_relevance_scores(question, k=TOP_K)
-        pairs = [(doc, score) for doc, score in pairs if score is None or score >= SCORE_THRESHOLD]
+        pairs = db.similarity_search_with_relevance_scores(question, k=effective_top_k)
+        pairs = [(doc, score) for doc, score in pairs if score is None or score >= effective_threshold]
     except Exception as exc:
         add_event(trace, "retrieval_score_fallback", {"error": str(exc)})
-        docs = get_retriever().invoke(question)
+        retriever = (
+            get_retriever()
+            if effective_top_k == TOP_K and effective_threshold == SCORE_THRESHOLD
+            else db.as_retriever(
+                search_type="similarity_score_threshold",
+                search_kwargs={"k": effective_top_k, "score_threshold": effective_threshold},
+            )
+        )
+        docs = retriever.invoke(question)
         pairs = [(doc, None) for doc in docs]
 
     chunks = [
         _citation_from_doc(doc, idx, score)
         for idx, (doc, score) in enumerate(pairs, start=1)
     ]
+    evidence_ok, evidence_reason = _evidence_status(chunks)
 
     set_trace_section(trace, "retrieval", {
         "latency_ms": round((perf_counter() - started) * 1000, 2),
-        "top_k": TOP_K,
-        "score_threshold": SCORE_THRESHOLD,
+        "top_k": effective_top_k,
+        "score_threshold": effective_threshold,
+        "min_evidence_results": MIN_EVIDENCE_RESULTS,
+        "min_evidence_score": MIN_EVIDENCE_SCORE,
         "chunk_count": len(chunks),
+        "evidence_ok": evidence_ok,
+        "evidence_reason": evidence_reason,
         "scores": [c["score"] for c in chunks if c.get("score") is not None],
         "sources": [c["source"] for c in chunks],
     })
@@ -161,6 +227,18 @@ def _retrieve_citations(question: str, trace: dict | None = None) -> list[dict]:
 
 def _retrieve(question: str) -> list[str]:
     return [chunk["text"] for chunk in _retrieve_citations(question)]
+
+
+def _evidence_status(chunks: list[dict]) -> tuple[bool, str]:
+    """Apply lightweight retrieval guardrails before generation."""
+    if len(chunks) < MIN_EVIDENCE_RESULTS:
+        return False, "not_enough_results"
+
+    scored = [float(c["score"]) for c in chunks if isinstance(c.get("score"), (int, float))]
+    if scored and max(scored) < MIN_EVIDENCE_SCORE:
+        return False, "top_score_below_threshold"
+
+    return True, "ok"
 
 
 def _format_context(chunks: list[dict]) -> str:
@@ -199,6 +277,8 @@ def rag_query(
     history: list[dict] | None = None,
     model_name: str | None = None,
     trace: dict | None = None,
+    top_k: int | None = None,
+    score_threshold: float | None = None,
 ) -> dict[str, object]:
     """Blocking RAG: retrieve → generate → return dict."""
     if facts:
@@ -210,8 +290,10 @@ def rag_query(
         )
         return {"question": question, "context": [], "answer": answer}
 
-    chunks = _retrieve_citations(question, trace=trace)
-    if not chunks:
+    chunks = _retrieve_citations(question, trace=trace, top_k=top_k, score_threshold=score_threshold)
+    evidence_ok, evidence_reason = _evidence_status(chunks)
+    if not evidence_ok:
+        add_event(trace, "rag_refusal", {"reason": evidence_reason})
         return {"question": question, "context": [], "answer": NO_INFO}
     answer = generate(
         system_prompt=RAG_SYSTEM_PROMPT,
@@ -260,7 +342,9 @@ def rag_stream(
         chunks = _retrieve_citations(question, trace=trace)
         yield _sse({"type": "context", "chunks": chunks})
 
-        if not chunks:
+        evidence_ok, evidence_reason = _evidence_status(chunks)
+        if not evidence_ok:
+            add_event(trace, "rag_refusal", {"reason": evidence_reason})
             yield _sse({"type": "token", "text": NO_INFO})
             yield _sse({"type": "done"})
             return

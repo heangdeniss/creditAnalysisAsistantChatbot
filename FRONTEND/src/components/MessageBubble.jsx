@@ -16,6 +16,7 @@ function normalizeChunk(chunk, index) {
   }
   return {
     citation_id: chunk.citation_id ?? `S${index + 1}`,
+    document_id: chunk.document_id ?? chunk.source ?? 'knowledge-base',
     source: chunk.source ?? 'knowledge-base',
     page: chunk.page ?? null,
     score: chunk.score ?? null,
@@ -61,10 +62,11 @@ export default function MessageBubble({ msg, showContext }) {
                   <div className="ctx-meta-row">
                     <span className="ctx-num">[{c.citation_id}]</span>
                     <span className="ctx-source">
-                      Knowledge base source{c.page !== null ? `, page ${c.page}` : ''}
+                      Doc {c.document_id}{c.page !== null ? `, page ${c.page}` : ''}
                     </span>
                     {typeof c.score === 'number' && <span className="ctx-score">{c.score.toFixed(3)}</span>}
                   </div>
+                  {c.chunk_id && <small className="ctx-id">Chunk: {c.chunk_id}</small>}
                   <p>{c.snippet.length > 400 ? `${c.snippet.slice(0, 400)}...` : c.snippet}</p>
                 </div>
               ))}
