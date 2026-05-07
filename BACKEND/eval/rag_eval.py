@@ -292,8 +292,11 @@ def run_eval(
     top_k: int | None = None,
     score_threshold: float | None = None,
     ablation: bool = False,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     cases = load_eval_cases(cases_path)
+    if isinstance(limit, int) and limit > 0:
+        cases = cases[:limit]
     results = [
         run_eval_case(
             case,
@@ -373,6 +376,7 @@ def main() -> int:
     parser.add_argument("--cases", default=str(DEFAULT_CASES), help="Path to JSONL eval cases.")
     parser.add_argument("--model", default="llama-1b", choices=["llama-1b", "llama-3b"])
     parser.add_argument("--retrieval-only", action="store_true", help="Skip LLM generation for a fast retrieval check.")
+    parser.add_argument("--limit", type=int, default=None, help="Optional limit on number of eval cases.")
     parser.add_argument("--top-k", type=int, default=None, help="Override RAG_TOP_K for this eval run.")
     parser.add_argument("--score-threshold", type=float, default=None, help="Override RAG_SCORE_THRESHOLD for this eval run.")
     parser.add_argument("--ablation", action="store_true", help="Compare active retrieval settings with a broader retrieval set.")
@@ -393,6 +397,7 @@ def main() -> int:
         top_k=args.top_k,
         score_threshold=args.score_threshold,
         ablation=args.ablation,
+        limit=args.limit,
     )
     output = write_eval_report(report, args.output or None)
     print(json.dumps(report["summary"], indent=2))

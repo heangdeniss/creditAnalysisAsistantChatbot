@@ -16,6 +16,7 @@ export default function App() {
   const [prefill,  setPrefill]  = useState('');
   const [tab,      setTab]      = useState('chat');   // 'chat' | 'predict'
   const [model,    setModel]    = useState('llama-1b');
+  const [showContext, setShowContext] = useState(false);
   const msgId       = useRef(0);
   const abortCtrl   = useRef(null);  // holds the AbortController for the current stream
   const messagesRef = useRef([]);    // stable ref so handleSend always sees latest messages
@@ -67,7 +68,11 @@ export default function App() {
         onQueued:  ()     => patch(bid, { queued: true }),
         onDone:    ()     => { setStatus('idle');  patch(bid, { streaming: false, queued: false }); abortCtrl.current = null; },
         onAbort:   ()     => { setStatus('idle');  patch(bid, { streaming: false, stopped: true, queued: false }); abortCtrl.current = null; },
-        onError:   err    => { patch(bid, { content: `⚠️ ${err.message}`, loading: false }); setStatus('error'); abortCtrl.current = null; },
+        onError:   err    => {
+          patch(bid, { content: `⚠️ ${err.message}\n\nTry again or check that the backend is running.`, loading: false });
+          setStatus('error');
+          abortCtrl.current = null;
+        },
       },
       { signal: ctrl.signal, history, model },
     );
@@ -113,6 +118,16 @@ export default function App() {
             </select>
           </label>
 
+          <label className="topbar-toggle" title="Show retrieved context">
+            <input
+              type="checkbox"
+              checked={showContext}
+              onChange={e => setShowContext(e.target.checked)}
+              disabled={status === 'busy'}
+            />
+            <span>Sources</span>
+          </label>
+
           <span className={`pill pill-${status}`}>
             {{ idle: 'Ready', busy: 'Generating…', error: 'Error' }[status]}
           </span>
@@ -120,7 +135,7 @@ export default function App() {
 
         {/* Both panels are always mounted — CSS hides the inactive one so state is preserved */}
         <div style={{ display: tab === 'chat' ? 'contents' : 'none' }}>
-          <ChatWindow messages={messages} showContext={true} />
+          <ChatWindow messages={messages} showContext={showContext} />
           <InputBar
             onSend={handleSend}
             onStop={handleStop}

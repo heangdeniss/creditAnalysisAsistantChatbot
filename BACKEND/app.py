@@ -10,12 +10,15 @@ Docs at:   http://localhost:8000/docs
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 import warnings
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from statistics import median
+from time import perf_counter
 
 os.environ["TF_ENABLE_ONEDNN_OPTS"]  = "0"
 os.environ["TF_CPP_MIN_LOG_LEVEL"]   = "3"
@@ -34,7 +37,7 @@ from contextlib import asynccontextmanager
 from threading import Event
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rag_pipeline import (
     get_retriever,
@@ -47,12 +50,44 @@ from model_loader import DEFAULT_MODEL, load_model, model_is_loaded, model_is_bu
 from ml_predict import load_all_models, predict as ml_predict, explain_shap
 from chroma_loader import chunk_texts, load_chroma_db
 from speech_to_text import transcribe_wav_bytes
-from observability import finish_trace, metrics_summary, recent_traces, start_trace
+from observability import (
+    add_event,
+    finish_trace,
+    inc_counter,
+    metrics_summary,
+    new_request_id,
+    recent_traces,
+    start_trace,
+)
+from runtime_utils import SlidingWindowRateLimiter, TTLCache, stable_json
 from eval.rag_eval import run_eval as run_rag_eval
+
+
+# Config
+INGEST_API_KEY = os.getenv("INGEST_API_KEY", "")   # set to require auth on /ingest
+SKIP_STARTUP_LOAD = os.getenv("SKIP_STARTUP_LOAD", "").lower() in {"1", "true", "yes"}
+
+RAG_CACHE_TTL_S = int(os.getenv("RAG_CACHE_TTL_S", "300"))
+RAG_CACHE_SIZE = int(os.getenv("RAG_CACHE_SIZE", "256"))
+PREDICT_CACHE_TTL_S = int(os.getenv("PREDICT_CACHE_TTL_S", "300"))
+PREDICT_CACHE_SIZE = int(os.getenv("PREDICT_CACHE_SIZE", "256"))
+
+RAG_TIMEOUT_S = float(os.getenv("RAG_TIMEOUT_S", "60"))
+PREDICT_TIMEOUT_S = float(os.getenv("PREDICT_TIMEOUT_S", "20"))
+RAG_RETRIES = int(os.getenv("RAG_RETRIES", "1"))
+PREDICT_RETRIES = int(os.getenv("PREDICT_RETRIES", "1"))
+STREAM_TIMEOUT_S = float(os.getenv("STREAM_TIMEOUT_S", "180"))
+
+RATE_LIMIT_WINDOW_S = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "90"))
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if SKIP_STARTUP_LOAD:
+        print("[startup] SKIP_STARTUP_LOAD=1 — skipping heavy model loads")
+        yield
+        return
     print("[startup] loading embeddings + retriever …")
     get_retriever()
     print(f"[startup] loading {DEFAULT_MODEL} …")
@@ -73,9 +108,144 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_EXECUTOR = ThreadPoolExecutor(max_workers=int(os.getenv("APP_WORKER_POOL", "4")))
+RAG_CACHE = TTLCache(max_size=RAG_CACHE_SIZE, ttl_s=RAG_CACHE_TTL_S)
+PREDICT_CACHE = TTLCache(max_size=PREDICT_CACHE_SIZE, ttl_s=PREDICT_CACHE_TTL_S)
+RATE_LIMITER = SlidingWindowRateLimiter(
+    max_requests=RATE_LIMIT_MAX,
+    window_s=RATE_LIMIT_WINDOW_S,
+)
+_RATE_LIMIT_EXEMPT = {"/health", "/metrics/summary", "/traces/recent"}
 
-# Config
-INGEST_API_KEY = os.getenv("INGEST_API_KEY", "")   # set to require auth on /ingest
+
+def _cache_key(prefix: str, payload: dict) -> str:
+    return f"{prefix}:{stable_json(payload)}"
+
+
+def _run_with_timeout(fn, *, timeout_s: float, trace: dict | None, label: str):
+    future = _EXECUTOR.submit(fn)
+    try:
+        return future.result(timeout=max(0.0, float(timeout_s)))
+    except FuturesTimeoutError as exc:
+        inc_counter(f"timeout_{label}")
+        add_event(trace, f"{label}_timeout", {"timeout_s": timeout_s})
+        raise TimeoutError(f"{label} timed out after {timeout_s}s") from exc
+
+
+def _run_with_retries(fn, *, timeout_s: float, retries: int, trace: dict | None, label: str):
+    last_exc: Exception | None = None
+    for attempt in range(max(0, int(retries)) + 1):
+        try:
+            return _run_with_timeout(fn, timeout_s=timeout_s, trace=trace, label=label)
+        except TimeoutError as exc:
+            last_exc = exc
+            if attempt < retries:
+                inc_counter(f"retry_{label}")
+                continue
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                inc_counter(f"retry_{label}")
+                continue
+            break
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"{label} failed without exception")
+
+
+def _rag_cached(*, payload: dict, trace: dict | None, call_fn):
+    cache_key = _cache_key("rag", payload)
+    if RAG_CACHE_TTL_S > 0:
+        cached = RAG_CACHE.get(cache_key)
+        if cached is not None:
+            inc_counter("rag_cache_hit")
+            add_event(trace, "rag_cache_hit", {"cache_key": cache_key})
+            return cached
+    inc_counter("rag_cache_miss")
+    result = _run_with_retries(
+        call_fn,
+        timeout_s=RAG_TIMEOUT_S,
+        retries=RAG_RETRIES,
+        trace=trace,
+        label="rag",
+    )
+    if RAG_CACHE_TTL_S > 0:
+        RAG_CACHE.set(cache_key, result)
+    return result
+
+
+def _predict_cached(*, payload: dict, trace: dict | None, label: str):
+    cache_key = _cache_key("predict", payload)
+    if PREDICT_CACHE_TTL_S > 0:
+        cached = PREDICT_CACHE.get(cache_key)
+        if cached is not None:
+            inc_counter("predict_cache_hit")
+            add_event(trace, "predict_cache_hit", {"cache_key": cache_key, "label": label})
+            return cached
+    inc_counter("predict_cache_miss")
+    result = _run_with_retries(
+        lambda: ml_predict(payload),
+        timeout_s=PREDICT_TIMEOUT_S,
+        retries=PREDICT_RETRIES,
+        trace=trace,
+        label=label,
+    )
+    if PREDICT_CACHE_TTL_S > 0:
+        PREDICT_CACHE.set(cache_key, result)
+    return result
+
+
+@app.middleware("http")
+async def rate_limit_and_log(request: Request, call_next):
+    req_id = new_request_id()
+    started = perf_counter()
+    client_ip = request.client.host if request.client else "unknown"
+    status_code = 500
+    error: str | None = None
+    response = None
+
+    if request.url.path not in _RATE_LIMIT_EXEMPT:
+        allowed, _ = RATE_LIMITER.allow(client_ip)
+        if not allowed:
+            inc_counter("rate_limit_block")
+            status_code = 429
+            response = JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Try again soon."},
+            )
+            response.headers["X-Request-Id"] = req_id
+            return response
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-Id"] = req_id
+        return response
+    except Exception as exc:
+        error = str(exc)
+        status_code = 500
+        raise
+    finally:
+        latency_ms = round((perf_counter() - started) * 1000, 2)
+        inc_counter("http_requests_total")
+        if status_code >= 400:
+            inc_counter("http_requests_error")
+        log = {
+            "type": "request",
+            "request_id": req_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status": status_code,
+            "latency_ms": latency_ms,
+            "client_ip": client_ip,
+        }
+        if error:
+            log["error"] = error
+        try:
+            print(json.dumps(log, ensure_ascii=True))
+        except Exception:
+            pass
+
 
 # Schemas
 class HistoryMessage(BaseModel):
@@ -194,6 +364,20 @@ def _derived_applicant_metrics(applicant: dict) -> dict:
     }
 
 
+def _scenario_changes(baseline_input: dict, overrides: dict) -> list[dict]:
+    """Return a compact list of changed fields for a scenario."""
+    changes = []
+    for field, new_value in overrides.items():
+        old_value = baseline_input.get(field)
+        if old_value != new_value:
+            changes.append({
+                "field": field,
+                "from": old_value,
+                "to": new_value,
+            })
+    return changes
+
+
 def _prediction_delta(baseline: dict | None, scenario: dict | None) -> dict | None:
     """Compare two model prediction rows returned by ml_predict.predict()."""
     if not baseline or not scenario:
@@ -214,13 +398,29 @@ def _prediction_delta(baseline: dict | None, scenario: dict | None) -> dict | No
     if baseline_probability != 0:
         relative_delta_pct = round((probability_delta / baseline_probability) * 100, 2)
 
+    direction = "increased" if probability_delta > 0 else "decreased" if probability_delta < 0 else "held steady"
+    decision_changed = baseline.get("decision") != scenario.get("decision")
+    grade_changed = baseline.get("grade") != scenario.get("grade")
+    label_changed = baseline.get("label") != scenario.get("label")
+    decision_text = (
+        f"Decision changed to {scenario.get('decision')} (was {baseline.get('decision')})."
+        if decision_changed
+        else "Decision unchanged."
+    )
+    impact_summary = (
+        f"PD {direction} by {abs(probability_delta):.2f} pts; {decision_text}"
+        if probability_delta != 0
+        else f"PD unchanged at {baseline_probability:.2f}%; {decision_text}"
+    )
+
     return {
         "status": "ok",
         "probability_delta": probability_delta,
         "relative_probability_delta_pct": relative_delta_pct,
-        "decision_changed": baseline.get("decision") != scenario.get("decision"),
-        "grade_changed": baseline.get("grade") != scenario.get("grade"),
-        "label_changed": baseline.get("label") != scenario.get("label"),
+        "decision_changed": decision_changed,
+        "grade_changed": grade_changed,
+        "label_changed": label_changed,
+        "impact_summary": impact_summary,
     }
 
 
@@ -276,7 +476,16 @@ def health() -> dict:
 @app.get("/metrics/summary")
 def metrics() -> dict:
     """Return lightweight in-process observability metrics for recent requests."""
-    return metrics_summary()
+    summary = metrics_summary()
+    summary["cache"] = {
+        "rag": RAG_CACHE.stats(),
+        "predict": PREDICT_CACHE.stats(),
+    }
+    summary["rate_limit"] = {
+        "window_s": RATE_LIMITER.window_s,
+        "max_requests": RATE_LIMITER.max_requests,
+    }
+    return summary
 
 
 @app.get("/traces/recent")
@@ -315,15 +524,28 @@ def query(body: QueryRequest) -> dict:
         facts_present=bool(body.facts),
     )
     try:
-        result = rag_query(
-            question=body.question.strip(),
-            facts=body.facts,
-            history=history,
-            model_name=body.model,
+        payload = {
+            "question": body.question.strip(),
+            "facts": body.facts,
+            "history": history or [],
+            "model": body.model,
+        }
+        result = _rag_cached(
+            payload=payload,
             trace=trace,
+            call_fn=lambda: rag_query(
+                question=payload["question"],
+                facts=payload["facts"],
+                history=history,
+                model_name=payload["model"],
+                trace=trace,
+            ),
         )
         finish_trace(trace, status="ok")
         return result
+    except TimeoutError as exc:
+        finish_trace(trace, status="error", error=str(exc))
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except Exception as exc:
         finish_trace(trace, status="error", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -349,8 +571,16 @@ async def stream(body: QueryRequest, request: Request) -> StreamingResponse:
         trace=trace,
     )
 
+    started = perf_counter()
+
     async def event_stream():
         for chunk in sync_gen:
+            if STREAM_TIMEOUT_S > 0 and (perf_counter() - started) > STREAM_TIMEOUT_S:
+                stop_event.set()
+                add_event(trace, "stream_timeout", {"timeout_s": STREAM_TIMEOUT_S})
+                payload = {"type": "error", "message": "Stream timed out. Please try again."}
+                yield f"data: {json.dumps(payload)}\n\n"
+                break
             if await request.is_disconnected():
                 stop_event.set()   # tell generate_stream to stop yielding
                 break
@@ -400,18 +630,27 @@ async def transcribe_audio(
 @app.post("/predict")
 def predict(body: PredictRequest) -> dict:
     """Run all available ML models and return credit-risk predictions."""
+    trace = start_trace("/predict")
     try:
-        return ml_predict(body.model_dump())
+        payload = body.model_dump()
+        result = _predict_cached(payload=payload, trace=trace, label="predict")
+        finish_trace(trace, status="ok")
+        return result
+    except TimeoutError as exc:
+        finish_trace(trace, status="error", error=str(exc))
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except Exception as exc:
+        finish_trace(trace, status="error", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/scenario")
 def simulate_scenarios(body: ScenarioSimulationRequest) -> dict:
     """Score a baseline applicant plus locally evaluated what-if scenarios."""
+    trace = start_trace("/scenario")
     try:
         baseline_input = body.base_applicant.model_dump()
-        baseline_scores = ml_predict(baseline_input)
+        baseline_scores = _predict_cached(payload=baseline_input, trace=trace, label="scenario_baseline")
         baseline = {
             "input": baseline_input,
             "derived_metrics": _derived_applicant_metrics(baseline_input),
@@ -428,12 +667,14 @@ def simulate_scenarios(body: ScenarioSimulationRequest) -> dict:
             )
             candidate_input = {**baseline_input, **overrides}
             validated_input = PredictRequest.model_validate(candidate_input).model_dump()
-            scenario_scores = ml_predict(validated_input)
+            scenario_scores = _predict_cached(payload=validated_input, trace=trace, label="scenario")
+            changes = _scenario_changes(baseline_input, overrides)
 
             item = {
                 "scenario_id": scenario.scenario_id,
                 "name": scenario.name,
                 "overrides": overrides,
+                "changes": changes,
                 "input": validated_input,
                 "derived_metrics": _derived_applicant_metrics(validated_input),
                 "scores": scenario_scores,
@@ -443,7 +684,7 @@ def simulate_scenarios(body: ScenarioSimulationRequest) -> dict:
                 item["top_drivers"] = _top_driver_summary(validated_input, body.drivers_model)
             scenarios.append(item)
 
-        return {
+        result = {
             "baseline": baseline,
             "scenarios": scenarios,
             "field_notes": {
@@ -452,7 +693,13 @@ def simulate_scenarios(body: ScenarioSimulationRequest) -> dict:
                 "unsupported_without_model_retraining": ["ltv", "dti", "debt"],
             },
         }
+        finish_trace(trace, status="ok")
+        return result
+    except TimeoutError as exc:
+        finish_trace(trace, status="error", error=str(exc))
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except Exception as exc:
+        finish_trace(trace, status="error", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

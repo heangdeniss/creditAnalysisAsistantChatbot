@@ -194,10 +194,14 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
             {loading ? '⏳ Predicting…' : '🔍 Predict Credit Risk'}
           </button>
 
-          {error && <p className="predict-error">⚠️ {error}</p>}
+          {error && (
+            <p className="predict-error">
+              ⚠️ {error}
+              <span className="predict-error-hint">Check that the backend is running on port 8000 and try again.</span>
+            </p>
+          )}
         </form>
 
-        {/* ── Results ───────────────────────────────────────── */}
         <div className="predict-results">
           <p className="predict-section-title">📊 Model Results</p>
 
@@ -234,13 +238,21 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
                       <div className="result-meta">
                         <span className={`result-grade grade-${r.grade}`}>{r.grade}</span>
                         <span className={`result-decision decision-${r.decision}`}>{r.decision}</span>
-                        <span className="result-pct">{r.probability.toFixed(1)}% PD</span>
+                        <span className="result-pct">Calibrated {r.probability.toFixed(1)}% PD</span>
+                      </div>
+                      <div className="result-submeta">
+                        <span>Raw {r.raw_probability?.toFixed(1) ?? r.probability.toFixed(1)}% PD</span>
+                        {Array.isArray(r.confidence_band)
+                          ? <span>Band {Number(r.confidence_band[0]).toFixed(1)}% - {Number(r.confidence_band[1]).toFixed(1)}%</span>
+                          : <span>Band N/A</span>
+                        }
                       </div>
                       <div className="result-prob">
                         <div className="result-prob-bar">
                           <div className="result-prob-fill" style={{ width: `${Math.min(r.probability, 100)}%` }} />
                         </div>
                       </div>
+                      <ExplainabilityMini result={r} />
                       <div className="result-card-footer">
                         {savedChats[key]?.length > 0
                           ? <div className="result-ask-hint result-ask-saved">💬 View saved explanation</div>
@@ -761,6 +773,34 @@ function Field({ label, children }) {
     <div className="predict-field">
       <label className="predict-label">{label}</label>
       {children}
+    </div>
+  );
+}
+
+function ExplainabilityMini({ result }) {
+  const band = Array.isArray(result.confidence_band) ? result.confidence_band : null;
+  const features = Array.isArray(result.top_features) ? result.top_features.slice(0, 3) : [];
+  if (!band && features.length === 0) return null;
+
+  return (
+    <div className="explain-mini">
+      {band && (
+        <div className="explain-band">
+          <span>Confidence band</span>
+          <strong>{Number(band[0]).toFixed(1)}% - {Number(band[1]).toFixed(1)}%</strong>
+        </div>
+      )}
+      {features.length > 0 && (
+        <div className="explain-feature-list">
+          {features.map(feature => (
+            <div className="explain-feature-row" key={`${feature.feature}-${feature.direction}`}>
+              <span className={`explain-dir explain-dir-${feature.direction}`}>{feature.direction === 'up' ? 'Risk up' : 'Risk down'}</span>
+              <span className="explain-feature-name">{feature.display_name ?? feature.feature}</span>
+              <strong>{Number(feature.magnitude).toFixed(2)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

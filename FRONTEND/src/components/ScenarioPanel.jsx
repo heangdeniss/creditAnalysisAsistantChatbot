@@ -72,19 +72,34 @@ function formatCurrency(value) {
 }
 
 function formatOverride(field, value) {
-  if (field === 'person_income' || field === 'loan_amnt') return `${FIELD_LABELS[field]} ${formatCurrency(value)}`;
-  if (field === 'loan_int_rate') return `${FIELD_LABELS[field]} ${Number(value).toFixed(2)}%`;
+  return `${FIELD_LABELS[field] ?? field} ${formatValue(field, value)}`;
+}
+
+function formatValue(field, value) {
+  if (field === 'person_income' || field === 'loan_amnt') return formatCurrency(value);
+  if (field === 'loan_int_rate') return `${Number(value).toFixed(2)}%`;
   if (field === 'person_age' || field === 'person_emp_length' || field === 'cb_person_cred_hist_length') {
-    return `${FIELD_LABELS[field]} ${Number(value).toFixed(1)} yrs`;
+    return `${Number(value).toFixed(1)} yrs`;
   }
-  if (field === 'cb_person_default_on_file') return `${FIELD_LABELS[field]} ${value === 'Y' ? 'Yes' : 'No'}`;
-  return `${FIELD_LABELS[field] ?? field} ${value}`;
+  if (field === 'cb_person_default_on_file') return value === 'Y' ? 'Yes' : 'No';
+  return `${value}`;
+}
+
+function formatChange(change) {
+  const label = FIELD_LABELS[change.field] ?? change.field;
+  return `${label}: ${formatValue(change.field, change.from)} → ${formatValue(change.field, change.to)}`;
 }
 
 function formatProbability(row) {
   if (!row) return 'N/A';
   if (row.error) return 'Error';
   return `${Number(row.probability).toFixed(1)}%`;
+}
+
+function formatComparison(baseline, scenario) {
+  if (!baseline || !scenario) return 'N/A';
+  if (baseline.error || scenario.error) return 'Error';
+  return `${Number(baseline.probability).toFixed(1)}% → ${Number(scenario.probability).toFixed(1)}%`;
 }
 
 function deltaClass(delta) {
@@ -299,7 +314,12 @@ export default function ScenarioPanel({ baseApplicant }) {
             </button>
           </div>
 
-          {error ? <p className="predict-error">{error}</p> : null}
+          {error ? (
+            <p className="predict-error">
+              ⚠️ {error}
+              <span className="predict-error-hint">Verify the backend is running and the baseline applicant is valid.</span>
+            </p>
+          ) : null}
 
           <div className="scenario-saved-list">
             {scenarios.length === 0 ? (
@@ -327,7 +347,7 @@ export default function ScenarioPanel({ baseApplicant }) {
               <div className="scenario-table">
                 <div className="scenario-table-head">
                   <span>Scenario</span>
-                  <span>PD</span>
+                  <span>Base → Scenario</span>
                   <span>Delta</span>
                   <span>Decision</span>
                 </div>
@@ -336,11 +356,21 @@ export default function ScenarioPanel({ baseApplicant }) {
                   const delta = scenario.deltas?.[selectedModel];
                   const lti = scenario.derived_metrics?.loan_to_income_pct;
                   const drivers = scenario.top_drivers?.drivers ?? [];
+                  const changes = Array.isArray(scenario.changes) ? scenario.changes : [];
                   return (
                     <div className="scenario-result-row" key={scenario.scenario_id ?? scenario.name}>
                       <div>
                         <strong>{scenario.name}</strong>
                         <span>{lti === null || lti === undefined ? 'LTI N/A' : `LTI ${lti.toFixed(1)}%`}</span>
+                        {changes.length > 0 ? (
+                          <div className="scenario-change-row">
+                            {changes.map(change => (
+                              <span className="scenario-change-chip" key={`${scenario.scenario_id}-${change.field}`}>
+                                {formatChange(change)}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                         {drivers.length > 0 ? (
                           <div className="scenario-driver-row">
                             {drivers.slice(0, 3).map(driver => (
@@ -350,8 +380,11 @@ export default function ScenarioPanel({ baseApplicant }) {
                             ))}
                           </div>
                         ) : null}
+                        {delta?.impact_summary ? (
+                          <div className="scenario-impact">{delta.impact_summary}</div>
+                        ) : null}
                       </div>
-                      <strong>{formatProbability(score)}</strong>
+                      <strong>{formatComparison(baselineScore, score)}</strong>
                       <span className={deltaClass(delta)}>{formatDelta(delta)}</span>
                       <ScoreBadge score={score} />
                     </div>

@@ -22,6 +22,7 @@ from uuid import uuid4
 RECENT_TRACE_LIMIT = int(os.getenv("RECENT_TRACE_LIMIT", "250"))
 
 _TRACES: deque[dict[str, Any]] = deque(maxlen=RECENT_TRACE_LIMIT)
+_COUNTERS: Counter = Counter()
 _LOCK = Lock()
 
 
@@ -107,6 +108,18 @@ def finish_trace(
     return frozen
 
 
+def inc_counter(name: str, amount: int = 1) -> None:
+    if not name:
+        return
+    with _LOCK:
+        _COUNTERS[name] += int(amount)
+
+
+def counter_snapshot() -> dict[str, int]:
+    with _LOCK:
+        return dict(_COUNTERS)
+
+
 def recent_traces(limit: int = 50) -> list[dict[str, Any]]:
     with _LOCK:
         return deepcopy(list(_TRACES)[:limit])
@@ -171,6 +184,7 @@ def metrics_summary() -> dict[str, Any]:
         "status_counts": dict(status_counts),
         "error_rate": round(errors / total, 4) if total else 0.0,
         "empty_retrieval_rate": round(empty_retrievals / total, 4) if total else 0.0,
+        "counters": counter_snapshot(),
         "latency_ms": {
             "p50": round(median(latencies), 2) if latencies else 0.0,
             "p95": _percentile(latencies, 0.95),

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from threading import Event
 from time import perf_counter
 from typing import Generator
@@ -46,6 +47,8 @@ TOP_K                = _env_int("RAG_TOP_K", "TOP_K", default=4)
 SCORE_THRESHOLD      = _env_float("RAG_SCORE_THRESHOLD", "SCORE_THRESHOLD", default=0.45)
 MIN_EVIDENCE_RESULTS = _env_int("RAG_MIN_EVIDENCE_RESULTS", default=1)
 MIN_EVIDENCE_SCORE   = _env_float("RAG_MIN_EVIDENCE_SCORE", default=SCORE_THRESHOLD)
+RETRIEVE_TIMEOUT_S    = _env_float("RAG_RETRIEVE_TIMEOUT_S", default=8.0)
+RETRIEVE_RETRIES      = _env_int("RAG_RETRIEVE_RETRIES", default=1, minimum=0)
 NO_INFO              = "I don't have enough information in my knowledge base to answer that."
 _CITATION_RE    = re.compile(r"\[S\d+\]")
 _SOURCE_PATH_RE = re.compile(
@@ -58,6 +61,7 @@ RAG_SYSTEM_PROMPT = (
     "You are a professional credit risk assistant. "
     "Answer the question using only the context provided. Be concise and stop when done — do not add extra sections, conclusions, or additional information. "
     "Do not mention source file names, file paths, folders, PDFs, text files, or training files in the answer. "
+    "Do not mention sources, citations, or labels like S1/S2. "
     "Format rules:\n"
     "- Plain English only. No jargon.\n"
     "- Use '- ' (dash space) for bullet points. Never use * or • as bullets.\n"
@@ -99,6 +103,7 @@ EXPLAIN_USER_TEMPLATE = """{facts}
 
 # Retriever singleton
 _retriever = None
+_retrieval_pool = ThreadPoolExecutor(max_workers=2)
 
 
 def retriever_is_loaded() -> bool:
@@ -169,6 +174,38 @@ def _citation_from_doc(doc, index: int, score: float | None = None) -> dict:
     }
 
 
+def _retrieve_pairs(
+    db,
+    question: str,
+    *,
+    top_k: int,
+    score_threshold: float,
+    trace: dict | None,
+) -> list[tuple[object, float | None]]:
+    try:
+        pairs = db.similarity_search_with_relevance_scores(
+            question,
+            k=top_k,
+            score_threshold=score_threshold,
+        )
+        return pairs
+    except TypeError:
+        pairs = db.similarity_search_with_relevance_scores(question, k=top_k)
+        return [(doc, score) for doc, score in pairs if score is None or score >= score_threshold]
+    except Exception as exc:
+        add_event(trace, "retrieval_score_fallback", {"error": str(exc)})
+        retriever = (
+            get_retriever()
+            if top_k == TOP_K and score_threshold == SCORE_THRESHOLD
+            else db.as_retriever(
+                search_type="similarity_score_threshold",
+                search_kwargs={"k": top_k, "score_threshold": score_threshold},
+            )
+        )
+        docs = retriever.invoke(question)
+        return [(doc, None) for doc in docs]
+
+
 def _retrieve_citations(
     question: str,
     trace: dict | None = None,
@@ -181,28 +218,44 @@ def _retrieve_citations(
     effective_top_k = max(1, int(top_k or TOP_K))
     effective_threshold = SCORE_THRESHOLD if score_threshold is None else float(score_threshold)
     db = load_chroma_db()
-    pairs = []
-    try:
-        pairs = db.similarity_search_with_relevance_scores(
-            question,
-            k=effective_top_k,
-            score_threshold=effective_threshold,
-        )
-    except TypeError:
-        pairs = db.similarity_search_with_relevance_scores(question, k=effective_top_k)
-        pairs = [(doc, score) for doc, score in pairs if score is None or score >= effective_threshold]
-    except Exception as exc:
-        add_event(trace, "retrieval_score_fallback", {"error": str(exc)})
-        retriever = (
-            get_retriever()
-            if effective_top_k == TOP_K and effective_threshold == SCORE_THRESHOLD
-            else db.as_retriever(
-                search_type="similarity_score_threshold",
-                search_kwargs={"k": effective_top_k, "score_threshold": effective_threshold},
-            )
-        )
-        docs = retriever.invoke(question)
-        pairs = [(doc, None) for doc in docs]
+    pairs: list[tuple[object, float | None]] = []
+    last_exc: Exception | None = None
+    for attempt in range(RETRIEVE_RETRIES + 1):
+        try:
+            if RETRIEVE_TIMEOUT_S > 0:
+                future = _retrieval_pool.submit(
+                    _retrieve_pairs,
+                    db,
+                    question,
+                    top_k=effective_top_k,
+                    score_threshold=effective_threshold,
+                    trace=trace,
+                )
+                pairs = future.result(timeout=RETRIEVE_TIMEOUT_S)
+            else:
+                pairs = _retrieve_pairs(
+                    db,
+                    question,
+                    top_k=effective_top_k,
+                    score_threshold=effective_threshold,
+                    trace=trace,
+                )
+            last_exc = None
+            break
+        except FuturesTimeoutError as exc:
+            last_exc = exc
+            add_event(trace, "retrieval_timeout", {
+                "attempt": attempt + 1,
+                "timeout_s": RETRIEVE_TIMEOUT_S,
+            })
+        except Exception as exc:
+            last_exc = exc
+            add_event(trace, "retrieval_error", {"attempt": attempt + 1, "error": str(exc)})
+        if attempt < RETRIEVE_RETRIES:
+            add_event(trace, "retrieval_retry", {"attempt": attempt + 1})
+
+    if last_exc and not pairs:
+        add_event(trace, "retrieval_failed", {"error": str(last_exc)})
 
     chunks = [
         _citation_from_doc(doc, idx, score)
@@ -244,8 +297,9 @@ def _evidence_status(chunks: list[dict]) -> tuple[bool, str]:
 def _format_context(chunks: list[dict]) -> str:
     blocks = []
     for chunk in chunks:
-        header = f"[{chunk['citation_id']}] Source: Credit risk knowledge base"
-        blocks.append(f"{header}\n{chunk['text']}")
+        text = str(chunk.get("text", "")).strip()
+        if text:
+            blocks.append(text)
     return "\n\n---\n\n".join(blocks)
 
 
@@ -261,6 +315,7 @@ def _citation_suffix(answer: str, chunks: list[dict]) -> str:
 
 def _postprocess_cited_answer(answer: str, chunks: list[dict]) -> str:
     cleaned = re.sub(r"(?m)^\s*\*\s+", "- ", answer).strip()
+    cleaned = re.sub(r"(?m)^\s*S\d+\s*[:\-]\s*", "", cleaned)
     cleaned = _SOURCE_PATH_RE.sub("the knowledge base", cleaned)
     cleaned = _CITATION_RE.sub("", cleaned).replace("  ", " ").strip()
     return f"{cleaned}{_citation_suffix(cleaned, chunks)}"

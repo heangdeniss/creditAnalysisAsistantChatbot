@@ -21,12 +21,33 @@ import numpy as np
 
 # Paths
 _ML_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "ML_Model"))
+_CALIBRATION_DIR = os.getenv("CALIBRATION_DIR", _ML_DIR)
+_WARN_MISSING_CALIBRATION = os.getenv("CALIBRATION_WARN_MISSING", "0").lower() in {"1", "true", "yes"}
 
 _MODEL_FILES: dict[str, str] = {
     "logistic_regression": os.path.join(_ML_DIR, "Logistic regression model.joblib"),
     "catboost":            os.path.join(_ML_DIR, "catboost_model_complete.pkl"),
     # NumPy MLP saved as {params, scaler, threshold, features}
     "neural_network":      os.path.join(_ML_DIR, "nn_model.pkl"),
+}
+
+_CALIBRATION_CANDIDATES: dict[str, list[str]] = {
+    "logistic_regression": [
+        "logistic_regression_calibration.joblib",
+        "logistic_regression_calibrator.joblib",
+        "calibration_logistic_regression.joblib",
+        "Logistic regression calibration.joblib",
+    ],
+    "catboost": [
+        "catboost_calibration.joblib",
+        "catboost_calibrator.joblib",
+        "calibration_catboost.joblib",
+    ],
+    "neural_network": [
+        "neural_network_calibration.joblib",
+        "neural_network_calibrator.joblib",
+        "calibration_neural_network.joblib",
+    ],
 }
 
 # Human-readable feature labels for SHAP output
@@ -107,6 +128,8 @@ FEATURE_COLS: list[str] = [
 
 # Model cache
 _cache: dict[str, Any] = {}
+_calibration_cache: dict[str, Any | None] = {}
+_calibration_warned: set[str] = set()
 _cb_explainer = None  # shap.TreeExplainer for CatBoost (built once on first use)
 
 
@@ -138,10 +161,41 @@ def _load(name: str) -> Any | None:
             return None
 
 
+def _load_calibrator(name: str) -> Any | None:
+    """Load an optional saved probability calibrator for a model."""
+    if name in _calibration_cache:
+        return _calibration_cache[name]
+
+    for filename in _CALIBRATION_CANDIDATES.get(name, []):
+        path = os.path.join(_CALIBRATION_DIR, filename)
+        if not os.path.exists(path):
+            continue
+        try:
+            calibrator = joblib.load(path)
+        except Exception:
+            try:
+                with open(path, "rb") as f:
+                    calibrator = pickle.load(f)
+            except Exception as exc:
+                print(f"[ml] WARNING  failed to load calibration model for {name}: {exc}")
+                calibrator = None
+        _calibration_cache[name] = calibrator
+        if calibrator is not None:
+            print(f"[ml] OK  loaded calibration model for {name}")
+        return calibrator
+
+    _calibration_cache[name] = None
+    if _WARN_MISSING_CALIBRATION and name not in _calibration_warned:
+        print(f"[ml] WARNING  calibration model not found for {name}; using identity calibration")
+        _calibration_warned.add(name)
+    return None
+
+
 def load_all_models() -> None:
     """Pre-warm all models at startup (called from FastAPI lifespan)."""
     for name in _MODEL_FILES:
         _load(name)
+        _load_calibrator(name)
 
 
 def _get_cb_explainer():
@@ -194,6 +248,64 @@ def _preprocess(X15: np.ndarray, scaler: Any) -> np.ndarray:
 
 def _sigmoid(z: float | np.ndarray) -> float:
     return float(1.0 / (1.0 + np.exp(-np.clip(z, -500, 500))))
+
+
+def _clip_probability(prob: float) -> float:
+    return float(np.clip(prob, 0.0, 1.0))
+
+
+def _logit(prob: float) -> float:
+    p = float(np.clip(prob, 1e-6, 1.0 - 1e-6))
+    return float(np.log(p / (1.0 - p)))
+
+
+def _coerce_probability(value: Any) -> float:
+    arr = np.asarray(value, dtype=float)
+    if arr.ndim == 0:
+        return _clip_probability(float(arr))
+    if arr.ndim >= 2 and arr.shape[-1] > 1:
+        return _clip_probability(float(arr.reshape(-1, arr.shape[-1])[0, 1]))
+    return _clip_probability(float(arr.ravel()[0]))
+
+
+def _calibrate_probability(model_name: str, raw_prob: float) -> tuple[float, dict]:
+    calibrator = _load_calibrator(model_name)
+    if calibrator is None:
+        return _clip_probability(raw_prob), {"method": "identity", "available": False}
+
+    try:
+        if isinstance(calibrator, dict):
+            method = str(calibrator.get("method", "")).lower()
+            if method == "platt" or {"a", "b"} <= set(calibrator) or {"coef", "intercept"} <= set(calibrator):
+                a = float(np.asarray(calibrator.get("a", calibrator.get("coef", 1.0))).ravel()[0])
+                b = float(np.asarray(calibrator.get("b", calibrator.get("intercept", 0.0))).ravel()[0])
+                return _sigmoid(a * _logit(raw_prob) + b), {"method": "platt", "available": True}
+
+            model = calibrator.get("model") or calibrator.get("calibrator")
+            if model is not None:
+                calibrator = model
+
+        X = np.array([[float(raw_prob)]])
+        if hasattr(calibrator, "predict_proba"):
+            return _coerce_probability(calibrator.predict_proba(X)), {"method": "predict_proba", "available": True}
+        if hasattr(calibrator, "predict"):
+            return _coerce_probability(calibrator.predict(X)), {"method": "predict", "available": True}
+        if callable(calibrator):
+            return _coerce_probability(calibrator(float(raw_prob))), {"method": "callable", "available": True}
+    except Exception as exc:
+        print(f"[ml] WARNING  calibration failed for {model_name}: {exc}; using identity calibration")
+
+    return _clip_probability(raw_prob), {"method": "identity", "available": False}
+
+
+def _confidence_band(calibrated_prob: float, calibration: dict) -> list[float]:
+    uncertainty = 1.0 - abs(float(calibrated_prob) - 0.5) * 2.0
+    half_width = 0.04 + 0.08 * max(0.0, uncertainty)
+    if not calibration.get("available"):
+        half_width += 0.03
+    lower = max(0.0, calibrated_prob - half_width)
+    upper = min(1.0, calibrated_prob + half_width)
+    return [round(lower * 100, 2), round(upper * 100, 2)]
 
 
 def _predict_lr(X15: np.ndarray) -> tuple[float, int]:
@@ -288,6 +400,89 @@ def _predict_nn(X15: np.ndarray) -> tuple[float, int]:
     prob     = _sigmoid(logit)
     return prob, int(prob >= thresh)
 
+
+_RUNNERS = {
+    "logistic_regression": _predict_lr,
+    "catboost": _predict_cb,
+    "neural_network": _predict_nn,
+}
+
+
+def _top_features_from_entries(entries: list[dict], *, method: str, unit: str, limit: int = 5) -> list[dict]:
+    non_zero = [row for row in entries if abs(float(row.get("shap_value", 0.0))) > 1e-12]
+    top = sorted(non_zero or entries, key=lambda row: abs(float(row.get("shap_value", 0.0))), reverse=True)[:limit]
+    features = []
+    for row in top:
+        value = float(row.get("shap_value", 0.0))
+        features.append({
+            "feature": row.get("feature"),
+            "display_name": row.get("display_name"),
+            "direction": "up" if value > 0 else "down",
+            "magnitude": round(abs(value), 6),
+            "contribution": round(value, 6),
+            "unit": unit,
+            "method": method,
+        })
+    return features
+
+
+def _linear_top_features(X15: np.ndarray) -> list[dict]:
+    pkg = _load("logistic_regression")
+    if pkg is None:
+        raise RuntimeError("logistic_regression model not available")
+
+    mean = np.asarray(pkg["mean"])
+    std = np.asarray(pkg["std"])
+    beta = np.asarray(pkg["beta"]).flatten()
+    x_scaled = (X15 - mean) / std
+    contributions = beta[1:] * x_scaled
+    return _top_features_from_entries(
+        _build_entries(X15, contributions),
+        method="linear_coefficients",
+        unit="log_odds",
+    )
+
+
+def _reference_vector(model_name: str, X15: np.ndarray) -> np.ndarray:
+    pkg = _load(model_name)
+    ref = X15.copy()
+    if model_name == "logistic_regression" and pkg is not None:
+        ref = np.asarray(pkg["mean"], dtype=np.float64).copy()
+    elif isinstance(pkg, dict) and hasattr(pkg.get("scaler"), "mean_"):
+        ref = np.asarray(pkg["scaler"].mean_, dtype=np.float64).copy()
+
+    for idx, col in enumerate(FEATURE_COLS):
+        if col in _DUMMY_GROUP or col == "cb_person_default_on_file_Y":
+            ref[idx] = 0.0
+    return ref
+
+
+def _ablation_top_features(model_name: str, X15: np.ndarray, base_prob: float) -> list[dict]:
+    runner = _RUNNERS[model_name]
+    ref = _reference_vector(model_name, X15)
+    contributions = np.zeros_like(X15, dtype=np.float64)
+
+    for idx in range(len(X15)):
+        if float(X15[idx]) == float(ref[idx]):
+            continue
+        ablated = X15.copy()
+        ablated[idx] = ref[idx]
+        ablated_prob, _ = runner(ablated)
+        contributions[idx] = (float(base_prob) - float(ablated_prob)) * 100.0
+
+    return _top_features_from_entries(
+        _build_entries(X15, contributions),
+        method="feature_ablation",
+        unit="percentage_points",
+    )
+
+
+def _top_features(model_name: str, X15: np.ndarray, base_prob: float) -> list[dict]:
+    if model_name == "logistic_regression":
+        return _linear_top_features(X15)
+    return _ablation_top_features(model_name, X15, base_prob)
+
+
 # Public API
 def predict(raw: dict) -> dict[str, dict | None]:
     """
@@ -297,23 +492,24 @@ def predict(raw: dict) -> dict[str, dict | None]:
     """
     X15 = _encode(raw)
 
-    runners = [
-        ("logistic_regression", _predict_lr),
-        ("catboost",            _predict_cb),
-        ("neural_network",      _predict_nn),
-    ]
-
     results: dict[str, dict | None] = {}
-    for name, runner in runners:
+    for name, runner in _RUNNERS.items():
         try:
-            prob, pred = runner(X15)
-            pd_pct = round(prob * 100, 2)
+            raw_prob, pred = runner(X15)
+            calibrated_prob, calibration = _calibrate_probability(name, raw_prob)
+            pd_pct = round(calibrated_prob * 100, 2)
+            raw_pd_pct = round(raw_prob * 100, 2)
             results[name] = {
-                "probability": pd_pct,
-                "prediction":  pred,
-                "label":       "Default" if pred == 1 else "No Default",
-                "grade":       _risk_grade(pd_pct),
-                "decision":    _decision(pd_pct),
+                "probability":              pd_pct,
+                "raw_probability":          raw_pd_pct,
+                "calibrated_probability":   pd_pct,
+                "calibration":              calibration,
+                "confidence_band":          _confidence_band(calibrated_prob, calibration),
+                "prediction":               pred,
+                "label":                    "Default" if pred == 1 else "No Default",
+                "grade":                    _risk_grade(pd_pct),
+                "decision":                 _decision(pd_pct),
+                "top_features":             _top_features(name, X15, raw_prob),
             }
         except RuntimeError:
             results[name] = None
