@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, deque
 import json
+import math
 from threading import Lock
 import time
 from typing import Any
@@ -42,6 +43,81 @@ class TTLCache:
         now = time.time()
         with self._lock:
             self._data[key] = (now + self._ttl_s, value)
+            self._data.move_to_end(key)
+            while len(self._data) > self._max_size:
+                self._data.popitem(last=False)
+
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            return {"size": len(self._data), "max_size": self._max_size}
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    """Return cosine similarity for two embedding vectors."""
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    dot = 0.0
+    left_norm = 0.0
+    right_norm = 0.0
+    for a, b in zip(left, right):
+        fa = float(a)
+        fb = float(b)
+        dot += fa * fb
+        left_norm += fa * fa
+        right_norm += fb * fb
+    denom = math.sqrt(left_norm) * math.sqrt(right_norm)
+    if denom <= 0:
+        return 0.0
+    return dot / denom
+
+
+class SemanticTTLCache:
+    """TTL + LRU cache that can match entries by embedding similarity."""
+
+    def __init__(self, *, max_size: int = 128, ttl_s: int = 300) -> None:
+        self._max_size = max(1, int(max_size))
+        self._ttl_s = max(1, int(ttl_s))
+        self._data: OrderedDict[str, tuple[float, str, list[float], Any]] = OrderedDict()
+        self._lock = Lock()
+
+    def _drop_expired(self, now: float) -> None:
+        expired = [key for key, (expires_at, *_rest) in self._data.items() if expires_at <= now]
+        for key in expired:
+            self._data.pop(key, None)
+
+    def get_similar(
+        self,
+        *,
+        namespace: str,
+        embedding: list[float],
+        min_similarity: float,
+    ) -> tuple[Any | None, float]:
+        now = time.time()
+        best_key: str | None = None
+        best_value: Any | None = None
+        best_score = 0.0
+        threshold = float(min_similarity)
+
+        with self._lock:
+            self._drop_expired(now)
+            for key, (_expires_at, item_namespace, item_embedding, value) in self._data.items():
+                if item_namespace != namespace:
+                    continue
+                score = cosine_similarity(embedding, item_embedding)
+                if score >= threshold and score > best_score:
+                    best_key = key
+                    best_value = value
+                    best_score = score
+            if best_key is not None:
+                self._data.move_to_end(best_key)
+                return best_value, round(best_score, 4)
+        return None, 0.0
+
+    def set(self, *, key: str, namespace: str, embedding: list[float], value: Any) -> None:
+        now = time.time()
+        with self._lock:
+            self._drop_expired(now)
+            self._data[key] = (now + self._ttl_s, namespace, list(embedding), value)
             self._data.move_to_end(key)
             while len(self._data) > self._max_size:
                 self._data.popitem(last=False)

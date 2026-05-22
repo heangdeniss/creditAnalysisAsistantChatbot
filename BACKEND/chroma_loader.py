@@ -59,17 +59,30 @@ def load_chroma_db() -> Chroma:
     if _db is not None:
         return _db
 
-    _embedding = E5Embeddings(
-        model_name=EMBED_MODEL,
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
-    )
+    _embedding = get_embedding_function()
     _db = Chroma(
         collection_name=COLLECTION,
         embedding_function=_embedding,
         persist_directory=CHROMA_DIR,
     )
     return _db
+
+
+def get_embedding_function() -> E5Embeddings:
+    """Return the shared E5 embedding model without constructing Chroma."""
+    global _embedding
+    if _embedding is None:
+        _embedding = E5Embeddings(
+            model_name=EMBED_MODEL,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
+    return _embedding
+
+
+def embed_query(text: str) -> list[float]:
+    """Embed a query using the same model/prefixing used by the vector store."""
+    return get_embedding_function().embed_query(text)
 
 
 def chunk_texts(texts: list[str], source: str = "api") -> tuple[list[str], list[dict]]:

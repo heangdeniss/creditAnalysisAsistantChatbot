@@ -17,6 +17,7 @@ import sys
 import warnings
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from copy import deepcopy
 from statistics import median
 from time import perf_counter
 
@@ -41,6 +42,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rag_pipeline import (
     get_retriever,
+    invalidate_retrieval_indexes,
+    query_refusal_reason,
     rag_query,
     rag_stream,
     retrieval_settings,
@@ -48,7 +51,7 @@ from rag_pipeline import (
 )
 from model_loader import DEFAULT_MODEL, load_model, model_is_loaded, model_is_busy, current_model_name, switch_model
 from ml_predict import load_all_models, predict as ml_predict, explain_shap
-from chroma_loader import chunk_texts, load_chroma_db
+from chroma_loader import chunk_texts, embed_query, load_chroma_db
 from speech_to_text import transcribe_wav_bytes
 from observability import (
     add_event,
@@ -59,16 +62,27 @@ from observability import (
     recent_traces,
     start_trace,
 )
-from runtime_utils import SlidingWindowRateLimiter, TTLCache, stable_json
+from runtime_utils import SemanticTTLCache, SlidingWindowRateLimiter, TTLCache, stable_json
 from eval.rag_eval import run_eval as run_rag_eval
 
 
 # Config
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 INGEST_API_KEY = os.getenv("INGEST_API_KEY", "")   # set to require auth on /ingest
 SKIP_STARTUP_LOAD = os.getenv("SKIP_STARTUP_LOAD", "").lower() in {"1", "true", "yes"}
 
 RAG_CACHE_TTL_S = int(os.getenv("RAG_CACHE_TTL_S", "300"))
 RAG_CACHE_SIZE = int(os.getenv("RAG_CACHE_SIZE", "256"))
+RAG_SEMANTIC_CACHE_ENABLED = _env_bool("RAG_SEMANTIC_CACHE_ENABLED", True)
+RAG_SEMANTIC_CACHE_TTL_S = int(os.getenv("RAG_SEMANTIC_CACHE_TTL_S", str(RAG_CACHE_TTL_S)))
+RAG_SEMANTIC_CACHE_SIZE = int(os.getenv("RAG_SEMANTIC_CACHE_SIZE", "128"))
+RAG_SEMANTIC_CACHE_THRESHOLD = float(os.getenv("RAG_SEMANTIC_CACHE_THRESHOLD", "0.93"))
 PREDICT_CACHE_TTL_S = int(os.getenv("PREDICT_CACHE_TTL_S", "300"))
 PREDICT_CACHE_SIZE = int(os.getenv("PREDICT_CACHE_SIZE", "256"))
 
@@ -110,6 +124,10 @@ app.add_middleware(
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=int(os.getenv("APP_WORKER_POOL", "4")))
 RAG_CACHE = TTLCache(max_size=RAG_CACHE_SIZE, ttl_s=RAG_CACHE_TTL_S)
+RAG_SEMANTIC_CACHE = SemanticTTLCache(
+    max_size=RAG_SEMANTIC_CACHE_SIZE,
+    ttl_s=RAG_SEMANTIC_CACHE_TTL_S,
+)
 PREDICT_CACHE = TTLCache(max_size=PREDICT_CACHE_SIZE, ttl_s=PREDICT_CACHE_TTL_S)
 RATE_LIMITER = SlidingWindowRateLimiter(
     max_requests=RATE_LIMIT_MAX,
@@ -120,6 +138,29 @@ _RATE_LIMIT_EXEMPT = {"/health", "/metrics/summary", "/traces/recent"}
 
 def _cache_key(prefix: str, payload: dict) -> str:
     return f"{prefix}:{stable_json(payload)}"
+
+
+def _semantic_cache_namespace(payload: dict) -> str:
+    return stable_json({
+        "facts": payload.get("facts") or "",
+        "history": payload.get("history") or [],
+        "model": payload.get("model") or "",
+    })
+
+
+def _semantic_cache_allowed(payload: dict) -> bool:
+    if not RAG_SEMANTIC_CACHE_ENABLED or RAG_SEMANTIC_CACHE_TTL_S <= 0:
+        return False
+    if query_refusal_reason(str(payload.get("question") or "")):
+        return False
+    return not payload.get("facts") and not payload.get("history")
+
+
+def _clone_cached_rag_result(result: dict, question: str) -> dict:
+    cloned = deepcopy(result)
+    if isinstance(cloned, dict):
+        cloned["question"] = question
+    return cloned
 
 
 def _run_with_timeout(fn, *, timeout_s: float, trace: dict | None, label: str):
@@ -162,6 +203,27 @@ def _rag_cached(*, payload: dict, trace: dict | None, call_fn):
             add_event(trace, "rag_cache_hit", {"cache_key": cache_key})
             return cached
     inc_counter("rag_cache_miss")
+
+    semantic_embedding: list[float] | None = None
+    semantic_namespace = ""
+    if _semantic_cache_allowed(payload):
+        semantic_namespace = _semantic_cache_namespace(payload)
+        try:
+            semantic_embedding = embed_query(str(payload.get("question") or ""))
+            cached, similarity = RAG_SEMANTIC_CACHE.get_similar(
+                namespace=semantic_namespace,
+                embedding=semantic_embedding,
+                min_similarity=RAG_SEMANTIC_CACHE_THRESHOLD,
+            )
+            if cached is not None:
+                inc_counter("rag_semantic_cache_hit")
+                add_event(trace, "rag_semantic_cache_hit", {"similarity": similarity})
+                return _clone_cached_rag_result(cached, str(payload.get("question") or ""))
+        except Exception as exc:
+            add_event(trace, "rag_semantic_cache_unavailable", {"error": str(exc)})
+    else:
+        inc_counter("rag_semantic_cache_skip")
+
     result = _run_with_retries(
         call_fn,
         timeout_s=RAG_TIMEOUT_S,
@@ -171,6 +233,13 @@ def _rag_cached(*, payload: dict, trace: dict | None, call_fn):
     )
     if RAG_CACHE_TTL_S > 0:
         RAG_CACHE.set(cache_key, result)
+    if semantic_embedding is not None and semantic_namespace:
+        RAG_SEMANTIC_CACHE.set(
+            key=cache_key,
+            namespace=semantic_namespace,
+            embedding=semantic_embedding,
+            value=result,
+        )
     return result
 
 
@@ -479,6 +548,11 @@ def metrics() -> dict:
     summary = metrics_summary()
     summary["cache"] = {
         "rag": RAG_CACHE.stats(),
+        "rag_semantic": {
+            **RAG_SEMANTIC_CACHE.stats(),
+            "enabled": RAG_SEMANTIC_CACHE_ENABLED,
+            "threshold": RAG_SEMANTIC_CACHE_THRESHOLD,
+        },
         "predict": PREDICT_CACHE.stats(),
     }
     summary["rate_limit"] = {
@@ -822,6 +896,7 @@ def ingest(body: IngestRequest, request: Request) -> dict:
         if not chunks:
             raise HTTPException(status_code=400, detail="No non-empty text chunks to ingest.")
         ids = db.add_texts(texts=chunks, metadatas=metadatas)
+        invalidate_retrieval_indexes()
         return {
             "added": len(ids),
             "ids": ids,
