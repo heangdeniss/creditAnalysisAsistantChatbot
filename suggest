@@ -1,3 +1,7 @@
+Fix CI import path, and
+Implement the missing advanced RAG utilities so tests pass.
+
+
 Major Features To Add Next
 
 Data ingestion UI + pipeline manager for documents, datasets, and model artifacts (upload, chunk, embed, validate, index).
