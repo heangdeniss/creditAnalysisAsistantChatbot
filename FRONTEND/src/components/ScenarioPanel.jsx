@@ -87,7 +87,7 @@ function formatValue(field, value) {
 
 function formatChange(change) {
   const label = FIELD_LABELS[change.field] ?? change.field;
-  return `${label}: ${formatValue(change.field, change.from)} → ${formatValue(change.field, change.to)}`;
+  return `${label}: ${formatValue(change.field, change.from)} -> ${formatValue(change.field, change.to)}`;
 }
 
 function formatProbability(row) {
@@ -99,7 +99,7 @@ function formatProbability(row) {
 function formatComparison(baseline, scenario) {
   if (!baseline || !scenario) return 'N/A';
   if (baseline.error || scenario.error) return 'Error';
-  return `${Number(baseline.probability).toFixed(1)}% → ${Number(scenario.probability).toFixed(1)}%`;
+  return `${Number(baseline.probability).toFixed(1)}% -> ${Number(scenario.probability).toFixed(1)}%`;
 }
 
 function deltaClass(delta) {
@@ -316,7 +316,7 @@ export default function ScenarioPanel({ baseApplicant }) {
 
           {error ? (
             <p className="predict-error">
-              ⚠️ {error}
+              Error: {error}
               <span className="predict-error-hint">Verify the backend is running and the baseline applicant is valid.</span>
             </p>
           ) : null}
@@ -347,7 +347,7 @@ export default function ScenarioPanel({ baseApplicant }) {
               <div className="scenario-table">
                 <div className="scenario-table-head">
                   <span>Scenario</span>
-                  <span>Base → Scenario</span>
+                  <span>Base to Scenario</span>
                   <span>Delta</span>
                   <span>Decision</span>
                 </div>

@@ -305,6 +305,7 @@ export default function InputBar({ onSend, onStop, generating, disabled, prefill
 
   const busy = disabled || generating || speechBusy || recording;
   const micDisabled = disabled || generating || speechBusy;
+  const statusHint = speechError || (recording ? 'Recording audio...' : speechBusy ? 'Transcribing audio...' : '');
 
   return (
     <footer className="input-bar">
@@ -312,7 +313,7 @@ export default function InputBar({ onSend, onStop, generating, disabled, prefill
         <textarea
           ref={ref}
           className="input-box"
-          placeholder="Ask about credit risk…"
+          placeholder="Ask about credit risk..."
           rows={1}
           disabled={disabled}
           onInput={e => { resize(e.target); onClearError?.(); }}
@@ -349,12 +350,9 @@ export default function InputBar({ onSend, onStop, generating, disabled, prefill
           )
         }
       </div>
-      <p className={`input-hint ${speechError ? 'input-hint-error' : ''}`}>
-        <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> new line · Mic speech-to-text
-        {recording ? ' · Recording… click mic to stop' : ''}
-        {speechBusy ? ' · Transcribing…' : ''}
-        {speechError ? ` · ${speechError}` : ''}
-      </p>
+      {statusHint ? (
+        <p className={`input-hint ${speechError ? 'input-hint-error' : ''}`}>{statusHint}</p>
+      ) : null}
     </footer>
   );
 }

@@ -32,25 +32,31 @@ const MODEL_LABELS = {
 };
 
 const DECISION_COLORS = {
-  APPROVE: '#3ddb82',
-  REVIEW: '#f5c542',
-  REJECT: '#ff5f5f',
+  APPROVE: '#16a34a',
+  REVIEW: '#d97706',
+  REJECT: '#dc2626',
 };
 
-const baseChartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  animation: { duration: 520, easing: 'easeOutQuart' },
-  plugins: {
-    legend: { labels: { color: '#dde3f5', boxWidth: 12, usePointStyle: true } },
-    tooltip: {
-      backgroundColor: 'rgba(19,22,32,0.95)',
-      borderColor: '#252a40',
-      borderWidth: 1,
-      titleColor: '#dde3f5',
-      bodyColor: '#c7d0ea',
-      displayColors: true,
-    },
+const CHART_THEME = {
+  dark: {
+    text: '#dde3f5',
+    muted: '#606a8a',
+    grid: 'rgba(221, 227, 245, 0.12)',
+    tooltipBg: '#101521',
+    tooltipBorder: '#252a40',
+    tooltipText: '#dde3f5',
+    surface: '#131620',
+    point: '#dde3f5',
+  },
+  light: {
+    text: '#18323d',
+    muted: '#637b86',
+    grid: 'rgba(24, 50, 61, 0.12)',
+    tooltipBg: 'rgba(255,255,255,0.97)',
+    tooltipBorder: '#dbe6ea',
+    tooltipText: '#18323d',
+    surface: '#ffffff',
+    point: '#18323d',
   },
 };
 
@@ -97,7 +103,25 @@ export default function RiskDashboard({
   loading = false,
   error = '',
   onRefresh,
+  theme = 'dark',
 }) {
+  const chartTheme = CHART_THEME[theme] ?? CHART_THEME.dark;
+  const baseChartOptions = useMemo(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 520, easing: 'easeOutQuart' },
+    plugins: {
+      legend: { labels: { color: chartTheme.text, boxWidth: 12, usePointStyle: true } },
+      tooltip: {
+        backgroundColor: chartTheme.tooltipBg,
+        borderColor: chartTheme.tooltipBorder,
+        borderWidth: 1,
+        titleColor: chartTheme.tooltipText,
+        bodyColor: chartTheme.tooltipText,
+        displayColors: true,
+      },
+    },
+  }), [chartTheme]);
   const modelRows = useMemo(() => {
     if (!result) return [];
 
@@ -168,8 +192,8 @@ export default function RiskDashboard({
         data: modelRows.length ? modelRows.map(row => row.probability) : [0],
         borderRadius: 8,
         backgroundColor: modelRows.length
-          ? modelRows.map(row => DECISION_COLORS[row.decision] ?? '#5b7fff')
-          : ['#3b4880'],
+          ? modelRows.map(row => DECISION_COLORS[row.decision] ?? '#0f766e')
+          : ['#c9d8dd'],
       },
     ],
   };
@@ -182,17 +206,21 @@ export default function RiskDashboard({
     },
     scales: {
       x: {
-        ticks: { color: '#a9b5d7' },
-        grid: { display: false },
+        ticks: { color: chartTheme.muted },
+        grid: { display: false, drawTicks: false },
+        border: { display: false },
       },
       y: {
         min: 0,
         max: 100,
         ticks: {
-          color: '#a9b5d7',
+          color: chartTheme.muted,
           callback: value => `${value}%`,
+          stepSize: 20,
+          maxTicksLimit: 6,
         },
-        grid: { color: 'rgba(96, 106, 138, 0.22)' },
+        grid: { color: chartTheme.grid, lineWidth: 0.6, drawTicks: false },
+        border: { display: false },
       },
     },
   };
@@ -217,16 +245,16 @@ export default function RiskDashboard({
         label: 'Borrower Input Pressure',
         data: inputRiskScores,
         borderRadius: 8,
-        backgroundColor: 'rgba(91, 127, 255, 0.78)',
-        borderColor: '#7b9aff',
+        backgroundColor: 'rgba(15, 118, 110, 0.78)',
+        borderColor: '#14b8a6',
         borderWidth: 1,
       },
       {
         type: 'line',
         label: 'Average Model PD',
         data: inputRiskLabels.map(() => Math.min(100, averagePd)),
-        borderColor: '#f5c542',
-        backgroundColor: 'rgba(245, 197, 66, 0.25)',
+        borderColor: '#d97706',
+        backgroundColor: 'rgba(217, 119, 6, 0.18)',
         borderWidth: 2,
         pointRadius: 2,
         pointHoverRadius: 3,
@@ -239,17 +267,21 @@ export default function RiskDashboard({
     ...baseChartOptions,
     scales: {
       x: {
-        ticks: { color: '#a9b5d7' },
-        grid: { display: false },
+        ticks: { color: chartTheme.muted },
+        grid: { display: false, drawTicks: false },
+        border: { display: false },
       },
       y: {
         min: 0,
         max: 100,
         ticks: {
-          color: '#a9b5d7',
+          color: chartTheme.muted,
           callback: value => `${value}%`,
+          stepSize: 20,
+          maxTicksLimit: 6,
         },
-        grid: { color: 'rgba(96, 106, 138, 0.22)' },
+        grid: { color: chartTheme.grid, lineWidth: 0.6, drawTicks: false },
+        border: { display: false },
       },
     },
   };
@@ -264,8 +296,8 @@ export default function RiskDashboard({
           : [1],
         backgroundColor: hasDecisionData
           ? [DECISION_COLORS.APPROVE, DECISION_COLORS.REVIEW, DECISION_COLORS.REJECT]
-          : ['#3b4880'],
-        borderColor: '#131620',
+          : ['#c9d8dd'],
+        borderColor: chartTheme.surface,
         borderWidth: 2,
       },
     ],
@@ -277,7 +309,7 @@ export default function RiskDashboard({
       ...baseChartOptions.plugins,
       legend: {
         display: hasDecisionData,
-        labels: { color: '#dde3f5', boxWidth: 10, usePointStyle: true },
+        labels: { color: chartTheme.text, boxWidth: 10, usePointStyle: true },
       },
     },
     cutout: '64%',
@@ -290,8 +322,8 @@ export default function RiskDashboard({
       {
         label: 'Documents',
         data: sourceEntries.length ? sourceEntries.map(([, count]) => asNumber(count, 0)) : [0],
-        backgroundColor: 'rgba(91, 127, 255, 0.75)',
-        borderColor: '#7b9aff',
+        backgroundColor: 'rgba(15, 118, 110, 0.72)',
+        borderColor: '#14b8a6',
         borderWidth: 1,
         borderRadius: 6,
       },
@@ -307,12 +339,14 @@ export default function RiskDashboard({
     },
     scales: {
       x: {
-        ticks: { color: '#a9b5d7' },
-        grid: { color: 'rgba(96, 106, 138, 0.22)' },
+        ticks: { color: chartTheme.muted },
+        grid: { color: chartTheme.grid, lineWidth: 0.6, drawTicks: false },
+        border: { display: false },
       },
       y: {
-        ticks: { color: '#a9b5d7' },
-        grid: { display: false },
+        ticks: { color: chartTheme.muted, maxTicksLimit: 5 },
+        grid: { display: false, drawTicks: false },
+        border: { display: false },
       },
     },
   };
@@ -331,10 +365,10 @@ export default function RiskDashboard({
         ],
         borderRadius: 8,
         backgroundColor: [
-          'rgba(59, 72, 128, 0.9)',
-          'rgba(91, 127, 255, 0.9)',
-          'rgba(123, 154, 255, 0.9)',
-          'rgba(245, 197, 66, 0.9)',
+          'rgba(99, 123, 134, 0.86)',
+          'rgba(15, 118, 110, 0.82)',
+          'rgba(20, 184, 166, 0.76)',
+          'rgba(217, 119, 6, 0.78)',
         ],
       },
     ],
@@ -348,12 +382,14 @@ export default function RiskDashboard({
     },
     scales: {
       x: {
-        ticks: { color: '#a9b5d7' },
-        grid: { display: false },
+        ticks: { color: chartTheme.muted },
+        grid: { display: false, drawTicks: false },
+        border: { display: false },
       },
       y: {
-        ticks: { color: '#a9b5d7' },
-        grid: { color: 'rgba(96, 106, 138, 0.22)' },
+        ticks: { color: chartTheme.muted, maxTicksLimit: 5, precision: 0 },
+        grid: { color: chartTheme.grid, lineWidth: 0.6, drawTicks: false },
+        border: { display: false },
       },
     },
   };
@@ -384,9 +420,9 @@ export default function RiskDashboard({
           Math.min(100, asNumber(retrieval.top_k, 0) * 10),
           Math.min(100, asNumber(retrieval.score_threshold, 0) * 100),
         ],
-        borderColor: '#7b9aff',
-        backgroundColor: 'rgba(123, 154, 255, 0.18)',
-        pointBackgroundColor: '#dde3f5',
+        borderColor: '#0f766e',
+        backgroundColor: 'rgba(20, 184, 166, 0.16)',
+        pointBackgroundColor: chartTheme.point,
         borderWidth: 2,
       },
     ],
@@ -403,9 +439,9 @@ export default function RiskDashboard({
         min: 0,
         max: 100,
         ticks: { display: false, stepSize: 20 },
-        angleLines: { color: 'rgba(96, 106, 138, 0.3)' },
-        grid: { color: 'rgba(96, 106, 138, 0.3)' },
-        pointLabels: { color: '#a9b5d7', font: { size: 11 } },
+        angleLines: { color: chartTheme.grid, lineWidth: 0.6 },
+        grid: { color: chartTheme.grid, lineWidth: 0.6 },
+        pointLabels: { color: chartTheme.muted, font: { size: 11 } },
       },
     },
   };
@@ -414,22 +450,22 @@ export default function RiskDashboard({
     <section className="risk-dashboard-wrap">
       <div className="risk-dashboard-head">
         <div>
-          <p className="predict-section-title">📈 Interactive Risk Dashboard</p>
+          <p className="predict-section-title">Interactive Risk Dashboard</p>
           <p className="risk-dashboard-subtitle">
             Explore submitted borrower inputs, model outcomes, and retrieval corpus health in real time.
           </p>
         </div>
         <button className="dashboard-refresh-btn" onClick={onRefresh} disabled={loading}>
-          {loading ? 'Refreshing…' : '↻ Refresh Data'}
+          {loading ? 'Refreshing...' : 'Refresh Data'}
         </button>
       </div>
 
-      {error ? <p className="predict-error">⚠️ {error}</p> : null}
+      {error ? <p className="predict-error">Error: {error}</p> : null}
 
       <div className="dashboard-kpi-grid">
         <article className="dashboard-kpi-card">
           <span className="dashboard-kpi-label">Average PD</span>
-          <strong className="dashboard-kpi-value">{modelRows.length ? `${averagePd.toFixed(1)}%` : '—'}</strong>
+          <strong className="dashboard-kpi-value">{modelRows.length ? `${averagePd.toFixed(1)}%` : '-'}</strong>
         </article>
         <article className="dashboard-kpi-card">
           <span className="dashboard-kpi-label">Consensus Decision</span>
@@ -440,7 +476,7 @@ export default function RiskDashboard({
         <article className="dashboard-kpi-card">
           <span className="dashboard-kpi-label">Highest Model Risk</span>
           <strong className="dashboard-kpi-value">
-            {highestRisk ? `${highestRisk.label} ${highestRisk.probability.toFixed(1)}%` : '—'}
+            {highestRisk ? `${highestRisk.label} ${highestRisk.probability.toFixed(1)}%` : '-'}
           </strong>
         </article>
         <article className="dashboard-kpi-card">
@@ -547,7 +583,7 @@ export default function RiskDashboard({
           <header className="dashboard-chart-head">
             <h4>Chunk Length Buckets</h4>
             <span>
-              Avg words {asNumber(docs.average_words, 0).toFixed(1)} · Median words{' '}
+              Avg words {asNumber(docs.average_words, 0).toFixed(1)} | Median words{' '}
               {asNumber(docs.median_words, 0).toFixed(1)}
             </span>
           </header>

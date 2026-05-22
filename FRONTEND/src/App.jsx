@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ChatWindow from './components/ChatWindow';
 import InputBar from './components/InputBar';
 import Sidebar from './components/Sidebar';
@@ -10,12 +10,23 @@ const MODEL_OPTIONS = [
   { value: 'llama-3b', label: 'Llama 3.2 3B' },
 ];
 
+const THEME_KEY = 'cr-theme';
+
+function getInitialTheme() {
+  if (typeof window === 'undefined') return 'dark';
+  const stored = window.localStorage.getItem(THEME_KEY);
+  if (stored === 'light' || stored === 'dark') return stored;
+  if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) return 'dark';
+  return 'light';
+}
+
 export default function App() {
   const [messages, setMessages] = useState([]);
   const [status,   setStatus]   = useState('idle');
   const [prefill,  setPrefill]  = useState('');
-  const [tab,      setTab]      = useState('chat');   // 'chat' | 'predict'
+  const [tab,      setTab]      = useState('predict');   // 'chat' | 'predict'
   const [model,    setModel]    = useState('llama-1b');
+  const [theme,    setTheme]    = useState(getInitialTheme);
   const [showContext, setShowContext] = useState(false);
   const msgId       = useRef(0);
   const abortCtrl   = useRef(null);  // holds the AbortController for the current stream
@@ -27,12 +38,25 @@ export default function App() {
   // Update browser tab title when switching tabs
   useEffect(() => {
     document.title = tab === 'chat'
-      ? 'Chat — Credit Risk Assistant'
-      : 'Predict — Credit Risk Assistant';
+      ? 'Chat - Credit Risk Assistant'
+      : 'Predict - Credit Risk Assistant';
   }, [tab]);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.style.colorScheme = theme;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(THEME_KEY, theme);
+    }
+  }, [theme]);
 
   const handleStop = useCallback(() => {
     abortCtrl.current?.abort();
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   }, []);
 
   const handleSend = useCallback(async (text) => {
@@ -69,7 +93,7 @@ export default function App() {
         onDone:    ()     => { setStatus('idle');  patch(bid, { streaming: false, queued: false }); abortCtrl.current = null; },
         onAbort:   ()     => { setStatus('idle');  patch(bid, { streaming: false, stopped: true, queued: false }); abortCtrl.current = null; },
         onError:   err    => {
-          patch(bid, { content: `⚠️ ${err.message}\n\nTry again or check that the backend is running.`, loading: false });
+          patch(bid, { content: `Error: ${err.message}\n\nTry again or check that the backend is running.`, loading: false });
           setStatus('error');
           abortCtrl.current = null;
         },
@@ -93,15 +117,15 @@ export default function App() {
       <div className="main">
         <header className="topbar">
           <div className="topbar-left">
-            <span className="topbar-logo">🦙</span>
+            <span className="topbar-logo">CR</span>
             <span className="topbar-title">Credit Risk Assistant</span>
           </div>
 
           <nav className="tab-bar">
             <button className={`tab-btn ${tab === 'chat' ? 'tab-active' : ''}`}
-              onClick={() => setTab('chat')}>💬 Chat</button>
+              onClick={() => setTab('chat')}>Chat</button>
             <button className={`tab-btn ${tab === 'predict' ? 'tab-active' : ''}`}
-              onClick={() => setTab('predict')}>🔍 Predict</button>
+              onClick={() => setTab('predict')}>Predict</button>
           </nav>
 
           <label className="model-switch" title="Choose chat model">
@@ -118,6 +142,21 @@ export default function App() {
             </select>
           </label>
 
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleTheme}
+            role="switch"
+            aria-checked={theme === 'dark'}
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          >
+            <span className="theme-toggle-track" aria-hidden="true" />
+            <span className="theme-toggle-text">
+              {theme === 'dark' ? 'Dark' : 'Light'}
+            </span>
+          </button>
+
           <label className="topbar-toggle" title="Show retrieved context">
             <input
               type="checkbox"
@@ -129,11 +168,11 @@ export default function App() {
           </label>
 
           <span className={`pill pill-${status}`}>
-            {{ idle: 'Ready', busy: 'Generating…', error: 'Error' }[status]}
+            {{ idle: 'Ready', busy: 'Generating...', error: 'Error' }[status]}
           </span>
         </header>
 
-        {/* Both panels are always mounted — CSS hides the inactive one so state is preserved */}
+        {/* Both panels stay mounted so inactive state is preserved. */}
         <div style={{ display: tab === 'chat' ? 'contents' : 'none' }}>
           <ChatWindow messages={messages} showContext={showContext} />
           <InputBar
@@ -147,7 +186,7 @@ export default function App() {
           />
         </div>
         <div style={{ display: tab === 'predict' ? 'contents' : 'none' }}>
-          <PredictPanel llmModel={model} />
+          <PredictPanel llmModel={model} theme={theme} />
         </div>
       </div>
     </div>

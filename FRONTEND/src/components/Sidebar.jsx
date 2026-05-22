@@ -17,8 +17,8 @@ const MODEL_TITLES = {
 };
 
 const MODEL_BADGES = {
-  'llama-1b': 'Llama 3.2 · 1B',
-  'llama-3b': 'Llama 3.2 · 3B',
+  'llama-1b': 'Llama 3.2 - 1B',
+  'llama-3b': 'Llama 3.2 - 3B',
 };
 
 export default function Sidebar({ onPromptClick, onClear, hasMsgs, activeModel = 'llama-1b' }) {
@@ -28,19 +28,19 @@ export default function Sidebar({ onPromptClick, onClear, hasMsgs, activeModel =
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span>🦙</span>
+        <span>AI</span>
         <strong>{modelTitle}</strong>
       </div>
 
       <section className="sidebar-section">
-        <p className="sidebar-label">💡 FAQ</p>
+        <p className="sidebar-label">FAQ</p>
         {PROMPTS.map(p => (
           <button key={p} className="prompt-btn" onClick={() => onPromptClick(p)}>{p}</button>
         ))}
       </section>
 
       {hasMsgs && (
-        <button className="clear-btn" onClick={onClear}>🗑️ Clear chat</button>
+        <button className="clear-btn" onClick={onClear}>Clear chat</button>
       )}
 
       <div className="sidebar-footer">

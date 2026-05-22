@@ -17,19 +17,6 @@ export default function ChatWindow({ messages, showContext }) {
 
   return (
     <section className="chat-window" ref={containerRef}>
-      {/* Welcome — shown only when the conversation is empty */}
-      {messages.length === 0 && (
-        <div className="msg msg-bot">
-          <div className="avatar">🦙</div>
-          <div className="bubble-wrap">
-            <div className="bubble">
-              👋 Hello! I'm your <strong>credit risk assistant</strong>.<br />
-              Ask me anything about credit risk, loan defaults, or financial analysis.
-            </div>
-          </div>
-        </div>
-      )}
-
       {messages.map(m => (
         <MessageBubble key={m.id} msg={m} showContext={showContext} />
       ))}

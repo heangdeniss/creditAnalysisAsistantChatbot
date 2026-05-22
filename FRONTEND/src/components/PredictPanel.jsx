@@ -21,10 +21,10 @@ const INIT = {
 const MODEL_LABELS = {
   logistic_regression: 'Logistic Regression',
   catboost:            'CatBoost',
-  neural_network:      'Neural Network',   // NumPy MLP (15 → 64 → 32 → 1)
+  neural_network:      'Neural Network',   // NumPy MLP (15 -> 64 -> 32 -> 1)
 };
 
-export default function PredictPanel({ llmModel = 'llama-1b' }) {
+export default function PredictPanel({ llmModel = 'llama-1b', theme = 'dark' }) {
   const [form,       setForm]       = useState(INIT);
   const [result,     setResult]     = useState(null);
   const [submittedInput, setSubmittedInput] = useState(null);
@@ -132,7 +132,7 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
 
         {/* ── Form ──────────────────────────────────────────── */}
         <form className="predict-form" onSubmit={handleSubmit}>
-          <p className="predict-section-title">👤 Borrower Info</p>
+          <p className="predict-section-title">Borrower Info</p>
 
           <div className="predict-grid">
             <Field label="Age (years)">
@@ -169,7 +169,7 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
             </Field>
           </div>
 
-          <p className="predict-section-title" style={{ marginTop: '20px' }}>💰 Loan Info</p>
+          <p className="predict-section-title" style={{ marginTop: '20px' }}>Loan Info</p>
 
           <div className="predict-grid">
             <Field label="Loan Amount ($)">
@@ -191,19 +191,19 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
           </div>
 
           <button className="predict-btn" type="submit" disabled={loading}>
-            {loading ? '⏳ Predicting…' : '🔍 Predict Credit Risk'}
+            {loading ? 'Predicting...' : 'Predict Credit Risk'}
           </button>
 
           {error && (
             <p className="predict-error">
-              ⚠️ {error}
+              Error: {error}
               <span className="predict-error-hint">Check that the backend is running on port 8000 and try again.</span>
             </p>
           )}
         </form>
 
         <div className="predict-results">
-          <p className="predict-section-title">📊 Model Results</p>
+          <p className="predict-section-title">Model Results</p>
 
           {!result && !loading && (
             <p className="predict-placeholder">Fill in the form and click Predict to see results.</p>
@@ -212,7 +212,7 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
           {loading && (
             <div className="predict-placeholder">
               <span className="typing"><span /><span /><span /></span>
-              <span style={{ marginLeft: 10 }}>Running models…</span>
+              <span style={{ marginLeft: 10 }}>Running models...</span>
             </div>
           )}
 
@@ -255,14 +255,14 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
                       <ExplainabilityMini result={r} />
                       <div className="result-card-footer">
                         {savedChats[key]?.length > 0
-                          ? <div className="result-ask-hint result-ask-saved">💬 View saved explanation</div>
-                          : <div className="result-ask-hint">💬 Click to ask why</div>
+                          ? <div className="result-ask-hint result-ask-saved">View saved explanation</div>
+                          : <div className="result-ask-hint">Click to ask why</div>
                         }
                         <button
                             className={`shap-toggle-btn${isShapOpen ? ' shap-toggle-btn-active' : ''}`}
                             onClick={e => { e.stopPropagation(); handleShapToggle(key); }}
                           >
-                            {isShapOpen ? '▲ Hide SHAP' : '⚡ SHAP'}
+                            {isShapOpen ? 'Hide SHAP' : 'SHAP'}
                           </button>
                       </div>
                     </>
@@ -285,6 +285,7 @@ export default function PredictPanel({ llmModel = 'llama-1b' }) {
         loading={dashboardLoading}
         error={dashboardError}
         onRefresh={() => { void loadDashboardStats(); }}
+        theme={theme}
       />
 
       {/* ── Full-width SHAP explanation section ──────────── */}
@@ -391,7 +392,7 @@ function ResultChatPopup({ llmModel, modelLabel, r, form, savedMessages, onSaveM
       onError: (e) => {
         setGenerating(false);
         setQueued(false);
-        setMessages(prev => { const u=[...prev]; u[u.length-1]={role:'bot',content:`⚠️ ${e}`}; return u; });
+        setMessages(prev => { const u=[...prev]; u[u.length-1]={role:'bot',content:`Error: ${e}`}; return u; });
       },
       onAbort: () => { setGenerating(false); setQueued(false); },
     }, { signal: ctrl.signal, facts, history, model: llmModel });
@@ -462,7 +463,7 @@ function ResultChatPopup({ llmModel, modelLabel, r, form, savedMessages, onSaveM
             <span className={`rchat-header-decision decision-${r.decision}`}>{r.decision}</span>
             <span className="rchat-header-pd">{r.probability.toFixed(1)}% PD</span>
           </div>
-          <button className="rchat-close" onClick={handleClose}>✕</button>
+          <button className="rchat-close" onClick={handleClose}>x</button>
         </div>
 
         {/* Messages */}
@@ -471,7 +472,7 @@ function ResultChatPopup({ llmModel, modelLabel, r, form, savedMessages, onSaveM
             <div key={i} className={`rchat-msg rchat-msg-${m.role}`}>
               {m.role === 'bot' && !m.content && generating
                 ? queued
-                  ? <span className="queued-msg">⏳ Waiting for model…</span>
+                  ? <span className="queued-msg">Waiting for model...</span>
                   : <span className="typing"><span /><span /><span /></span>
                 : m.role === 'bot'
                   ? <div className="rchat-msg-text rchat-md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown></div>
@@ -487,7 +488,7 @@ function ResultChatPopup({ llmModel, modelLabel, r, form, savedMessages, onSaveM
           <textarea
             ref={textareaRef}
             className="rchat-input"
-            placeholder="Ask a follow-up question…"
+            placeholder="Ask a follow-up question..."
             value={input}
             rows={1}
             onChange={e => {
@@ -499,8 +500,8 @@ function ResultChatPopup({ llmModel, modelLabel, r, form, savedMessages, onSaveM
             disabled={generating}
           />
           {generating
-            ? <button className="rchat-stop-btn" onClick={handleStop}>■</button>
-            : <button className="rchat-send-btn" onClick={handleSend} disabled={!input.trim()}>↑</button>
+            ? <button className="rchat-stop-btn" onClick={handleStop}>Stop</button>
+            : <button className="rchat-send-btn" onClick={handleSend} disabled={!input.trim()}>Send</button>
           }
         </div>
       </div>
@@ -515,7 +516,7 @@ function ShapChart({ data, error, modelLabel, standalone = false }) {
   if (error) {
     return (
       <div className={standalone ? 'shap-sa-msg shap-sa-error' : 'shap-panel shap-error-panel'}>
-        ⚠️ {error}
+        Error: {error}
       </div>
     );
   }
@@ -523,7 +524,7 @@ function ShapChart({ data, error, modelLabel, standalone = false }) {
     return (
       <div className={standalone ? 'shap-sa-msg shap-sa-loading' : 'shap-panel shap-loading-panel'}>
         <span className="typing"><span /><span /><span /></span>
-        <span>Computing SHAP values…</span>
+        <span>Computing SHAP values...</span>
       </div>
     );
   }
@@ -588,19 +589,19 @@ function ShapChart({ data, error, modelLabel, standalone = false }) {
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className="shap-header">
         <div className="shap-title-row">
-          <span className="shap-title">⚡ SHAP Waterfall</span>
+          <span className="shap-title">SHAP Waterfall</span>
           {modelLabel && <span className="shap-model-chip">{modelLabel}</span>}
         </div>
         <span className="shap-subtitle">
           Base <strong>{(base_prob * 100).toFixed(1)}%</strong>
-          {' → '}f(x) <strong>{(final_prob * 100).toFixed(1)}%</strong>
+          {' -> '}f(x) <strong>{(final_prob * 100).toFixed(1)}%</strong>
           {'  '}
           <span className={delta_pct > 0 ? 'shap-legend-pos' : 'shap-legend-neg'}>
-            {delta_pct > 0 ? '▲' : '▼'} {Math.abs(delta_pct).toFixed(1)}% net
+            {delta_pct > 0 ? '+' : '-'} {Math.abs(delta_pct).toFixed(1)}% net
           </span>
-          {'  ·  '}
-          <span className="shap-legend-pos">■ risk+</span>{' '}
-          <span className="shap-legend-neg">■ risk−</span>
+          {'  |  '}
+          <span className="shap-legend-pos">risk+</span>{' '}
+          <span className="shap-legend-neg">risk-</span>
         </span>
       </div>
 
