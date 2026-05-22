@@ -19,6 +19,8 @@ from typing import Any
 import joblib
 import numpy as np
 
+from feature_store import standardize_applicant
+
 # Paths
 _ML_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "ML_Model"))
 _CALIBRATION_DIR = os.getenv("CALIBRATION_DIR", _ML_DIR)
@@ -217,6 +219,7 @@ def _get_cb_explainer():
 
 # Feature encoding  (raw dict  →  15-d float64 vector in FEATURE_COLS order)
 def _encode(raw: dict) -> np.ndarray:
+    raw = standardize_applicant(raw)
     home   = str(raw.get("person_home_ownership", "")).upper()
     intent = str(raw.get("loan_intent", "")).upper()
     cb_def = str(raw.get("cb_person_default_on_file", "N")).upper()

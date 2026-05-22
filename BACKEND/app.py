@@ -50,8 +50,12 @@ from rag_pipeline import (
     retriever_is_loaded,
 )
 from model_loader import DEFAULT_MODEL, load_model, model_is_loaded, model_is_busy, current_model_name, switch_model
+from model_server_client import external_generation_enabled
 from ml_predict import load_all_models, predict as ml_predict, explain_shap
 from chroma_loader import chunk_texts, embed_query, load_chroma_db
+from feature_store import derived_features, encode_applicant, feature_contract, standardize_applicant
+from job_queue import get_job, list_jobs, queue_stats, submit_job
+from service_clients import remote_batch_score, remote_predict, remote_tabular_enabled
 from speech_to_text import transcribe_wav_bytes
 from observability import (
     add_event,
@@ -104,8 +108,11 @@ async def lifespan(_: FastAPI):
         return
     print("[startup] loading embeddings + retriever …")
     get_retriever()
-    print(f"[startup] loading {DEFAULT_MODEL} …")
-    load_model(DEFAULT_MODEL)
+    if external_generation_enabled():
+        print("[startup] using external LLM model server")
+    else:
+        print(f"[startup] loading {DEFAULT_MODEL} …")
+        load_model(DEFAULT_MODEL)
     print("[startup] loading ML models …")
     load_all_models()
     print("[startup] ✅ ready")
@@ -252,8 +259,9 @@ def _predict_cached(*, payload: dict, trace: dict | None, label: str):
             add_event(trace, "predict_cache_hit", {"cache_key": cache_key, "label": label})
             return cached
     inc_counter("predict_cache_miss")
+    predict_fn = remote_predict if remote_tabular_enabled() else ml_predict
     result = _run_with_retries(
-        lambda: ml_predict(payload),
+        lambda: predict_fn(payload),
         timeout_s=PREDICT_TIMEOUT_S,
         retries=PREDICT_RETRIES,
         trace=trace,
@@ -421,16 +429,13 @@ class RagEvalRequest(BaseModel):
     ablation:       bool       = Field(default=False, description="Compare default retrieval settings against a broader retrieval set.")
 
 
+class BatchScoreRequest(BaseModel):
+    applicants: list[PredictRequest] = Field(..., min_length=1, max_length=1000)
+
+
 def _derived_applicant_metrics(applicant: dict) -> dict:
     """Return local derived metrics that are useful for scenario comparison."""
-    income = float(applicant.get("person_income") or 0)
-    loan_amount = float(applicant.get("loan_amnt") or 0)
-    loan_to_income_pct = None
-    if income > 0:
-        loan_to_income_pct = round((loan_amount / income) * 100, 2)
-    return {
-        "loan_to_income_pct": loan_to_income_pct,
-    }
+    return derived_features(applicant)
 
 
 def _scenario_changes(baseline_input: dict, overrides: dict) -> list[dict]:
@@ -532,6 +537,52 @@ def _top_driver_summary(applicant: dict, model_name: str, limit: int = 5) -> dic
         }
 
 
+def _ingest_documents(body: IngestRequest) -> dict:
+    db = load_chroma_db()
+    chunks, metadatas = chunk_texts(body.texts, source=body.source)
+    if not chunks:
+        raise ValueError("No non-empty text chunks to ingest.")
+    ids = db.add_texts(texts=chunks, metadatas=metadatas)
+    invalidate_retrieval_indexes()
+    return {
+        "added": len(ids),
+        "ids": ids,
+        "chunk_size": retrieval_settings()["chunk_size"],
+        "chunk_overlap": retrieval_settings()["chunk_overlap"],
+    }
+
+
+def _eval_kwargs(body: RagEvalRequest) -> dict:
+    kwargs = {
+        "model_name": body.model,
+        "retrieval_only": body.retrieval_only,
+        "ablation": body.ablation,
+    }
+    if body.top_k is not None:
+        kwargs["top_k"] = body.top_k
+    if body.score_threshold is not None:
+        kwargs["score_threshold"] = body.score_threshold
+    if body.cases_path:
+        kwargs["cases_path"] = body.cases_path
+    return kwargs
+
+
+def _batch_score(body: BatchScoreRequest) -> dict:
+    if remote_tabular_enabled():
+        return remote_batch_score([applicant.model_dump() for applicant in body.applicants])
+
+    rows = []
+    for idx, applicant in enumerate(body.applicants, start=1):
+        payload = applicant.model_dump()
+        rows.append({
+            "row": idx,
+            "input": standardize_applicant(payload),
+            "derived_metrics": derived_features(payload),
+            "scores": ml_predict(payload),
+        })
+    return {"count": len(rows), "rows": rows}
+
+
 # Routes
 @app.get("/health")
 def health() -> dict:
@@ -559,6 +610,13 @@ def metrics() -> dict:
         "window_s": RATE_LIMITER.window_s,
         "max_requests": RATE_LIMITER.max_requests,
     }
+    summary["queue"] = queue_stats()
+    summary["services"] = {
+        "api_gateway": "in-process",
+        "retrieval": os.getenv("RETRIEVAL_SERVICE_URL", "local"),
+        "inference": os.getenv("LLM_MODEL_SERVER_URL", "local"),
+        "tabular_scoring": os.getenv("TABULAR_SCORING_SERVICE_URL", "local"),
+    }
     return summary
 
 
@@ -568,22 +626,75 @@ def traces(limit: int = Query(default=25, ge=1, le=250)) -> dict:
     return {"traces": recent_traces(limit)}
 
 
+@app.get("/features/contract")
+def get_feature_contract() -> dict:
+    """Return the shared tabular feature preprocessing contract."""
+    return feature_contract()
+
+
+@app.post("/features/transform")
+def transform_features(body: PredictRequest) -> dict:
+    """Return standardized applicant fields, derived metrics, and model vector."""
+    payload = body.model_dump()
+    vector = encode_applicant(payload)
+    return {
+        "contract_version": feature_contract()["version"],
+        "standardized": standardize_applicant(payload),
+        "derived_metrics": derived_features(payload),
+        "feature_columns": feature_contract()["feature_columns"],
+        "feature_vector": [float(value) for value in vector],
+    }
+
+
+@app.get("/jobs")
+def jobs(limit: int = Query(default=50, ge=1, le=250)) -> dict:
+    """List recent background jobs."""
+    return {"jobs": list_jobs(limit)}
+
+
+@app.get("/jobs/{job_id}")
+def job_status(job_id: str) -> dict:
+    """Return a background job by id."""
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
+
+
+@app.post("/jobs/ingest", status_code=202)
+def enqueue_ingest(body: IngestRequest, request: Request) -> dict:
+    """Queue document ingestion work."""
+    if INGEST_API_KEY and request.headers.get("X-API-Key", "") != INGEST_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing X-API-Key header.")
+    return submit_job(
+        "ingest",
+        lambda: _ingest_documents(body),
+        payload={"source": body.source, "text_count": len(body.texts)},
+    )
+
+
+@app.post("/jobs/eval/rag", status_code=202)
+def enqueue_rag_eval(body: RagEvalRequest) -> dict:
+    """Queue a RAG evaluation run."""
+    kwargs = _eval_kwargs(body)
+    return submit_job("rag_eval", lambda: run_rag_eval(**kwargs), payload=kwargs)
+
+
+@app.post("/jobs/batch-score", status_code=202)
+def enqueue_batch_score(body: BatchScoreRequest) -> dict:
+    """Queue batch tabular scoring."""
+    return submit_job(
+        "batch_score",
+        lambda: _batch_score(body),
+        payload={"applicants": len(body.applicants)},
+    )
+
+
 @app.post("/eval/rag")
 def eval_rag(body: RagEvalRequest) -> dict:
     """Run the local RAG eval harness. Defaults to retrieval-only for speed."""
     try:
-        kwargs = {
-            "model_name": body.model,
-            "retrieval_only": body.retrieval_only,
-            "ablation": body.ablation,
-        }
-        if body.top_k is not None:
-            kwargs["top_k"] = body.top_k
-        if body.score_threshold is not None:
-            kwargs["score_threshold"] = body.score_threshold
-        if body.cases_path:
-            kwargs["cases_path"] = body.cases_path
-        return run_rag_eval(**kwargs)
+        return run_rag_eval(**_eval_kwargs(body))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -891,20 +1002,11 @@ def ingest(body: IngestRequest, request: Request) -> dict:
         if request.headers.get("X-API-Key", "") != INGEST_API_KEY:
             raise HTTPException(status_code=403, detail="Invalid or missing X-API-Key header.")
     try:
-        db = load_chroma_db()
-        chunks, metadatas = chunk_texts(body.texts, source=body.source)
-        if not chunks:
-            raise HTTPException(status_code=400, detail="No non-empty text chunks to ingest.")
-        ids = db.add_texts(texts=chunks, metadatas=metadatas)
-        invalidate_retrieval_indexes()
-        return {
-            "added": len(ids),
-            "ids": ids,
-            "chunk_size": retrieval_settings()["chunk_size"],
-            "chunk_overlap": retrieval_settings()["chunk_overlap"],
-        }
+        return _ingest_documents(body)
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

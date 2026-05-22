@@ -20,6 +20,7 @@ FT-Transformer or TabNet for tabular risk scoring.
 Calibration models (Platt, isotonic) per segment and per model.
 Drift detection model for incoming data distribution shifts.
 Reranker fine-tune on your corpus (cross-encoder, pairwise ranking).
+
 Architecture Improvements
 
 Split into services: API gateway, inference service (LLM), retrieval service, and tabular scoring service.

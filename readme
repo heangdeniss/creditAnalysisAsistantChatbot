@@ -104,3 +104,79 @@ so it will create chunk in chroma_db
 
 open Terminal1 locate to BACKEND then command: python app.py
 open terminal2 locate to Frontend then commnad: npm run dev
+
+
+
+# BACKEND Explaination 
+
+# Backend Overview (Short)
+
+This backend is a FastAPI service for a credit-risk assistant. It supports RAG chat, tabular ML predictions, scenario simulation, SHAP explainability, speech-to-text, ingestion, and lightweight observability.
+
+## Core Components
+
+- API gateway: app.py (monolith entrypoint).
+- RAG pipeline: rag_pipeline.py (retrieve -> generate -> postprocess).
+- LLM runtime: model_loader.py (local Transformers) + model_server_client.py (optional external model server).
+- Tabular scoring: ml_predict.py (LR/CatBoost/NN) + feature_store.py (shared feature contract).
+- Vector store: chroma_loader.py (Chroma + E5 embeddings).
+- Speech-to-text: speech_to_text.py (Whisper).
+- Observability: observability.py + event_bus.py (traces + events).
+- Job queue: job_queue.py (in-process async jobs).
+
+## Key Flows (High Level)
+
+RAG chat
+1) /query or /stream receives a question
+2) rag_pipeline.py retrieves chunks from Chroma
+3) model_loader.py (or model server) generates the answer
+4) response includes answer + retrieved context
+
+Prediction
+1) /predict validates features (Pydantic)
+2) ml_predict.py scores all available models
+3) response includes PD, grade, decision, and top features
+
+Scenario simulation
+1) /scenario merges baseline + overrides
+2) each scenario is scored via ml_predict.py
+3) response includes deltas and derived metrics
+
+Ingestion
+1) /ingest chunks incoming text
+2) chunks are embedded and added to Chroma
+
+Speech-to-text
+1) /transcribe accepts WAV
+2) whisper-medium transcribes audio to text
+
+## Deployment Modes
+
+Single service (default)
+- Run app.py directly for all features.
+
+Split services (optional)
+- services/api_gateway.py (port 8000)
+- services/inference_service.py (port 8011)
+- services/retrieval_service.py (port 8012)
+- services/tabular_scoring_service.py (port 8013)
+
+## Storage and Models
+
+- Vector DB: chroma_db/ (Chroma persistent store)
+- LLMs: model/llama-1b and model/llama-3b
+- Tabular ML: ML_Model/ (joblib/pickle artifacts)
+
+## Useful Environment Flags
+
+- SKIP_STARTUP_LOAD=1 to skip heavy startup loads
+- LLM_MODEL_SERVER_URL to use external vLLM/TGI for generation
+- TABULAR_SCORING_SERVICE_URL to delegate scoring to the split service
+- OTEL_EXPORTER_OTLP_ENDPOINT to send events to OpenTelemetry
+
+## What To Read First
+
+- app.py: routes and orchestration
+- rag_pipeline.py: retrieval + generation logic
+- ml_predict.py: ML scoring and SHAP
+- feature_store.py: canonical feature contract

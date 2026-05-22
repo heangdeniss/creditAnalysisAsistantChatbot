@@ -18,6 +18,8 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
+from event_bus import publish_event
+
 
 RECENT_TRACE_LIMIT = int(os.getenv("RECENT_TRACE_LIMIT", "250"))
 
@@ -105,6 +107,11 @@ def finish_trace(
         print(json.dumps({"type": "trace", **frozen}, ensure_ascii=True))
     except Exception:
         pass
+    publish_event(
+        "trace.finished",
+        frozen,
+        severity="ERROR" if status == "error" else "INFO",
+    )
     return frozen
 
 

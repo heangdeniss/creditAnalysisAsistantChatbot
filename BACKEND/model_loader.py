@@ -26,6 +26,12 @@ logging.getLogger("transformers").setLevel(logging.ERROR)
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
+from model_server_client import (
+    external_generation_enabled,
+    external_model_name,
+    generate_via_model_server,
+    stream_via_model_server,
+)
 from observability import add_event, set_trace_section
 
 # Config
@@ -74,11 +80,15 @@ def normalize_model_name(model_name: str | None) -> str:
 
 def model_is_loaded() -> bool:
     """Return True once the tokenizer and model have been loaded."""
+    if external_generation_enabled():
+        return True
     return _tokenizer is not None and _model is not None
 
 
 def model_is_busy() -> bool:
     """Non-blocking check: True if the model is currently generating."""
+    if external_generation_enabled():
+        return False
     acquired = _gen_lock.acquire(blocking=False)
     if acquired:
         _gen_lock.release()
@@ -87,6 +97,8 @@ def model_is_busy() -> bool:
 
 def current_model_name() -> str:
     """Return the active model key, defaulting to llama-1b before first load."""
+    if external_generation_enabled():
+        return external_model_name(DEFAULT_MODEL)
     return _active_model_name or DEFAULT_MODEL
 
 
@@ -159,6 +171,8 @@ def load_model(model_name: str | None = None) -> tuple[AutoTokenizer, AutoModelF
 
 def switch_model(model_name: str | None = None) -> str:
     """Synchronously switch the active model, waiting for current generation if needed."""
+    if external_generation_enabled():
+        return external_model_name(model_name)
     with _gen_lock:
         _, _, selected = load_model(model_name)
     return selected
@@ -202,6 +216,18 @@ def generate(
     trace: dict | None = None,
 ) -> str:
     """Return a complete generated answer (blocking)."""
+    if external_generation_enabled():
+        return generate_via_model_server(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            history=history,
+            model_name=model_name,
+            trace=trace,
+            max_tokens=MAX_NEW_TOKENS,
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+        )
+
     wait_started = perf_counter()
     with _gen_lock:
         queue_wait_ms = round((perf_counter() - wait_started) * 1000, 2)
@@ -247,6 +273,19 @@ def generate_stream(
     If stop_event is set (e.g. because the client disconnected) the generator
     stops yielding immediately and lets the daemon thread finish naturally.
     """
+    if external_generation_enabled():
+        yield from stream_via_model_server(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            history=history,
+            model_name=model_name,
+            trace=trace,
+            max_tokens=MAX_NEW_TOKENS,
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+        )
+        return
+
     lock_attempted = Event()
     is_queued      = Event()
     streamer_ready = Event()
