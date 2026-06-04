@@ -22,7 +22,22 @@ const MODEL_LABELS = {
   logistic_regression: 'Logistic Regression',
   catboost:            'CatBoost',
   neural_network:      'Neural Network',   // NumPy MLP (15 -> 64 -> 32 -> 1)
+  random_forest:       'Random Forest',
 };
+
+function asNumber(value, fallback = null) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatCurrency(value, digits = 0) {
+  const num = asNumber(value);
+  if (num === null) return 'N/A';
+  return `$${num.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })}`;
+}
 
 export default function PredictPanel({ llmModel = 'llama-1b', theme = 'dark' }) {
   const [form,       setForm]       = useState(INIT);
@@ -220,6 +235,16 @@ export default function PredictPanel({ llmModel = 'llama-1b', theme = 'dark' }) 
             const r = result[key];
             const clickable = r && !r.error;
             const isShapOpen = shapOpen === key;
+            const expectedLoss = r?.expected_loss ?? null;
+            const suggestion = r?.approval_suggestion ?? null;
+            const lossAmount = asNumber(expectedLoss?.amount);
+            const stressedLoss = asNumber(expectedLoss?.stressed_amount);
+            const stressedPd = asNumber(expectedLoss?.stressed_pd_pct);
+            const lgd = asNumber(expectedLoss?.lgd);
+            const suggestedAmount = asNumber(suggestion?.suggested_loan_amount);
+            const targetPd = asNumber(suggestion?.target_pd_pct);
+            const estimatedPd = asNumber(suggestion?.estimated_pd_pct);
+            const capLoan = asNumber(suggestion?.cap_loan_amount);
             return (
               <div key={key}>
                 <div
@@ -247,6 +272,57 @@ export default function PredictPanel({ llmModel = 'llama-1b', theme = 'dark' }) 
                           : <span>Band N/A</span>
                         }
                       </div>
+                      {expectedLoss && (
+                        <div className="result-submeta">
+                          {lossAmount !== null && (
+                            <span>Expected loss {formatCurrency(lossAmount, 2)} (base)</span>
+                          )}
+                          {stressedLoss !== null && stressedLoss !== lossAmount && (
+                            <span>
+                              Stressed {formatCurrency(stressedLoss, 2)}{stressedPd !== null ? ` (PD ${stressedPd.toFixed(1)}%)` : ''}
+                            </span>
+                          )}
+                          {lgd !== null && (
+                            <span>LGD {(lgd * 100).toFixed(0)}%</span>
+                          )}
+                        </div>
+                      )}
+                      {suggestion && (
+                        <div className="result-submeta">
+                          {suggestion.status === 'approved_as_is' && suggestedAmount !== null && (
+                            <span>
+                              Suggested loan {formatCurrency(suggestedAmount)} (meets {(targetPd ?? 0).toFixed(1)}% PD)
+                            </span>
+                          )}
+                          {suggestion.status === 'increase_amount' && suggestedAmount !== null && (
+                            <span>
+                              Suggested max loan {formatCurrency(suggestedAmount)} to stay under {(targetPd ?? 0).toFixed(1)}% PD
+                            </span>
+                          )}
+                          {suggestion.status === 'cap_reached' && suggestedAmount !== null && (
+                            <span>
+                              Suggested max loan {formatCurrency(suggestedAmount)} (cap) under {(targetPd ?? 0).toFixed(1)}% PD
+                            </span>
+                          )}
+                          {suggestion.status === 'reduce_amount' && suggestedAmount !== null && (
+                            <span>
+                              Suggested loan {formatCurrency(suggestedAmount)} to reach {(targetPd ?? 0).toFixed(1)}% PD
+                            </span>
+                          )}
+                          {suggestion.status === 'unreachable' && (
+                            <span>Cannot reach {(targetPd ?? 0).toFixed(1)}% PD at minimum loan</span>
+                          )}
+                          {suggestion.status === 'unavailable' && (
+                            <span>Loan suggestion unavailable</span>
+                          )}
+                          {capLoan !== null && suggestion.status === 'cap_reached' && (
+                            <span>Cap {formatCurrency(capLoan)}</span>
+                          )}
+                          {estimatedPd !== null && !['unavailable', 'unreachable'].includes(suggestion.status) && (
+                            <span>Est. PD {estimatedPd.toFixed(1)}%</span>
+                          )}
+                        </div>
+                      )}
                       <div className="result-prob">
                         <div className="result-prob-bar">
                           <div className="result-prob-fill" style={{ width: `${Math.min(r.probability, 100)}%` }} />
@@ -336,6 +412,7 @@ function ResultChatPopup({ llmModel, modelLabel, r, form, savedMessages, onSaveM
     logistic_regression: 'a statistical model that scores credit risk using weighted borrower features',
     catboost:            'a gradient-boosted decision tree model trained on credit risk data',
     neural_network:      'a statistical model trained on credit risk data that evaluates borrower characteristics',
+    random_forest:       'an ensemble tree model trained on credit risk data',
   };
   const modelKey  = Object.keys(MODEL_LABELS).find(k => MODEL_LABELS[k] === modelLabel) ?? '';
   const modelDesc = MODEL_DESCRIPTIONS[modelKey] ?? 'a credit risk scoring model';
@@ -554,11 +631,15 @@ function ShapChart({ data, error, modelLabel, standalone = false }) {
       }]
     : top;
 
+  const usesPercentagePoints = data.model === 'random_forest';
   const clo        = [data.base_value];
   rows.forEach(r => clo.push(clo.at(-1) + r.shap_value));
-  const probs      = clo.map(sigmoid);
+  const probs      = usesPercentagePoints
+    ? clo.map(value => Math.min(1, Math.max(0, value / 100)))
+    : clo.map(sigmoid);
   const base_prob  = probs[0];
   const final_prob = probs[probs.length - 1];
+  const valueUnit  = usesPercentagePoints ? 'percentage points' : 'log-odds';
 
   /* ── X mapping: probability → chart pixel ───────────────────── */
   const XPAD   = 0.04;
@@ -699,7 +780,7 @@ function ShapChart({ data, error, modelLabel, standalone = false }) {
               >
                 <title>
                   {r.display_name}: {delta > 0 ? '+' : ''}{delta.toFixed(2)}%
-                  {' (log-odds '}{r.shap_value > 0 ? '+' : ''}{r.shap_value.toFixed(4)}{')'}
+                  {` (${valueUnit} `}{r.shap_value > 0 ? '+' : ''}{r.shap_value.toFixed(4)}{')'}
                 </title>
               </rect>
               {/* Probability delta value */}

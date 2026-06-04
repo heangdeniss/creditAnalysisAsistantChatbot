@@ -73,7 +73,7 @@ def score(body: ApplicantRequest) -> dict:
     return {
         "input": standardize_applicant(payload),
         "derived_metrics": derived_features(payload),
-        "scores": predict(payload),
+        "scores": predict(payload, include_suggestions=True),
     }
 
 
@@ -86,7 +86,7 @@ def batch_score(body: BatchScoreRequest) -> dict:
             "row": idx,
             "input": standardize_applicant(payload),
             "derived_metrics": derived_features(payload),
-            "scores": predict(payload),
+            "scores": predict(payload, include_suggestions=False),
         })
     return {"count": len(rows), "rows": rows}
 

@@ -15,7 +15,12 @@ def test_predict_returns_keys():
     }
     result = predict(payload)
     assert "logistic_regression" in result
+    assert "random_forest" in result
     lr = result["logistic_regression"]
     if lr:
         assert "probability" in lr
         assert "confidence_band" in lr
+    rf = result["random_forest"]
+    if rf:
+        assert "probability" in rf
+        assert "confidence_band" in rf

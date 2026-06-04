@@ -5,6 +5,8 @@ Models
   - logistic_regression : custom LR stored as {beta, mean, std, threshold}
   - catboost            : sklearn-API CatBoost stored as {model, scaler, threshold}
   - neural_network      : NumPy MLP stored as {params, scaler, threshold, features}
+  - random_forest       : sklearn RandomForestClassifier stored as {model, threshold}
+                          OR a bare RandomForestClassifier object
 
 Public functions
   predict(raw)              → predictions from all models
@@ -12,6 +14,7 @@ Public functions
 """
 from __future__ import annotations
 
+import math
 import os
 import pickle
 from typing import Any
@@ -26,11 +29,42 @@ _ML_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "ML_Mod
 _CALIBRATION_DIR = os.getenv("CALIBRATION_DIR", _ML_DIR)
 _WARN_MISSING_CALIBRATION = os.getenv("CALIBRATION_WARN_MISSING", "0").lower() in {"1", "true", "yes"}
 
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+EXPECTED_LOSS_LGD = _env_float("EXPECTED_LOSS_LGD", 0.45)
+SUGGESTION_TARGET_PD_PCT = _env_float("SUGGESTION_TARGET_PD_PCT", 5.0)
+SUGGESTION_MIN_LOAN = _env_float("SUGGESTION_MIN_LOAN", 500.0)
+SUGGESTION_LOAN_STEP = _env_float("SUGGESTION_LOAN_STEP", 50.0)
+SUGGESTION_MAX_ITER = _env_int("SUGGESTION_MAX_ITER", 24)
+SUGGESTION_MAX_LOAN = _env_float("SUGGESTION_MAX_LOAN", 50000.0)
+SUGGESTION_MAX_LOAN_MULTIPLIER = _env_float("SUGGESTION_MAX_LOAN_MULTIPLIER", 2.0)
+
 _MODEL_FILES: dict[str, str] = {
     "logistic_regression": os.path.join(_ML_DIR, "Logistic regression model.joblib"),
     "catboost":            os.path.join(_ML_DIR, "catboost_model_complete.pkl"),
     # NumPy MLP saved as {params, scaler, threshold, features}
     "neural_network":      os.path.join(_ML_DIR, "nn_model.pkl"),
+    # sklearn RandomForestClassifier (bare or wrapped in a dict with a threshold key)
+    "random_forest":       os.path.join(_ML_DIR, "random_forest_model.pkl"),
 }
 
 _CALIBRATION_CANDIDATES: dict[str, list[str]] = {
@@ -49,6 +83,11 @@ _CALIBRATION_CANDIDATES: dict[str, list[str]] = {
         "neural_network_calibration.joblib",
         "neural_network_calibrator.joblib",
         "calibration_neural_network.joblib",
+    ],
+    "random_forest": [
+        "random_forest_calibration.joblib",
+        "random_forest_calibrator.joblib",
+        "calibration_random_forest.joblib",
     ],
 }
 
@@ -105,6 +144,40 @@ def _decision(pd_pct: float) -> str:
     if pd_pct <= 5:   return "APPROVE"
     if pd_pct <= 10:  return "REVIEW"
     return "REJECT"
+
+
+def _expected_loss_metrics(
+    pd_pct: float,
+    loan_amount: float,
+    *,
+    confidence_band: list[float] | None = None,
+    lgd: float | None = None,
+) -> dict[str, float]:
+    lgd_value = EXPECTED_LOSS_LGD if lgd is None else float(lgd)
+    lgd_value = float(np.clip(lgd_value, 0.0, 1.0))
+    exposure = max(float(loan_amount), 0.0)
+
+    pd_value = float(np.clip(pd_pct / 100.0, 0.0, 1.0))
+    expected_loss = round(pd_value * exposure * lgd_value, 2)
+    expected_loss_pct = round(pd_value * lgd_value * 100.0, 2)
+
+    stressed_pd_pct = pd_pct
+    if confidence_band and len(confidence_band) >= 2:
+        stressed_pd_pct = max(stressed_pd_pct, float(confidence_band[1]))
+    stressed_pd_value = float(np.clip(stressed_pd_pct / 100.0, 0.0, 1.0))
+    stressed_loss = round(stressed_pd_value * exposure * lgd_value, 2)
+    stressed_loss_pct = round(stressed_pd_value * lgd_value * 100.0, 2)
+
+    return {
+        "amount": expected_loss,
+        "rate_pct": expected_loss_pct,
+        "ead": round(exposure, 2),
+        "lgd": round(lgd_value, 4),
+        "base_pd_pct": round(pd_pct, 2),
+        "stressed_amount": stressed_loss,
+        "stressed_rate_pct": stressed_loss_pct,
+        "stressed_pd_pct": round(stressed_pd_pct, 2),
+    }
 
 # Feature columns  (exact order from pd.get_dummies(drop_first=True))
 FEATURE_COLS: list[str] = [
@@ -301,6 +374,128 @@ def _calibrate_probability(model_name: str, raw_prob: float) -> tuple[float, dic
     return _clip_probability(raw_prob), {"method": "identity", "available": False}
 
 
+def _score_pd_pct_for_amount(model_name: str, base_raw: dict, loan_amount: float) -> float:
+    payload = dict(base_raw)
+    payload["loan_amnt"] = float(loan_amount)
+    X15 = _encode(payload)
+    raw_prob, _ = _RUNNERS[model_name](X15)
+    calibrated_prob, _ = _calibrate_probability(model_name, raw_prob)
+    return float(calibrated_prob) * 100.0
+
+
+def _suggestion_cap_amount(requested_amount: float) -> float:
+    cap = max(float(requested_amount), 0.0)
+    cap = max(cap, float(requested_amount) * float(SUGGESTION_MAX_LOAN_MULTIPLIER))
+    max_cap = max(float(SUGGESTION_MAX_LOAN), float(requested_amount))
+    return min(cap, max_cap)
+
+
+def _search_max_loan_for_target(
+    base_raw: dict,
+    model_name: str,
+    *,
+    target_pd_pct: float,
+    low: float,
+    high: float,
+) -> float:
+    step = max(float(SUGGESTION_LOAN_STEP), 1.0)
+    lo = float(low)
+    hi = float(high)
+    for _ in range(max(1, int(SUGGESTION_MAX_ITER))):
+        if (hi - lo) <= step:
+            break
+        mid = (lo + hi) / 2.0
+        pd_mid = _score_pd_pct_for_amount(model_name, base_raw, mid)
+        if pd_mid <= target_pd_pct:
+            lo = mid
+        else:
+            hi = mid
+    return max(float(SUGGESTION_MIN_LOAN), math.floor(lo / step) * step)
+
+
+def _suggest_loan_amount(
+    base_raw: dict,
+    model_name: str,
+    *,
+    target_pd_pct: float,
+    current_pd_pct: float,
+) -> dict:
+    try:
+        requested_amount = float(base_raw.get("loan_amnt", 0.0))
+    except (TypeError, ValueError):
+        requested_amount = 0.0
+
+    if requested_amount <= 0:
+        return {
+            "status": "unavailable",
+            "reason": "missing_loan_amount",
+            "target_pd_pct": round(float(target_pd_pct), 2),
+        }
+
+    target = float(target_pd_pct)
+    min_amount = max(float(SUGGESTION_MIN_LOAN), 0.0)
+    requested_amount = max(requested_amount, min_amount)
+    cap_amount = max(_suggestion_cap_amount(requested_amount), min_amount)
+
+    if current_pd_pct <= target:
+        pd_at_cap = _score_pd_pct_for_amount(model_name, base_raw, cap_amount)
+        if pd_at_cap <= target:
+            return {
+                "status": "cap_reached",
+                "target_pd_pct": round(target, 2),
+                "requested_loan_amount": round(requested_amount, 2),
+                "suggested_loan_amount": round(cap_amount, 2),
+                "estimated_pd_pct": round(pd_at_cap, 2),
+                "cap_loan_amount": round(cap_amount, 2),
+            }
+
+        suggested = _search_max_loan_for_target(
+            base_raw,
+            model_name,
+            target_pd_pct=target,
+            low=requested_amount,
+            high=cap_amount,
+        )
+        pd_suggested = _score_pd_pct_for_amount(model_name, base_raw, suggested)
+        status = "approved_as_is" if abs(suggested - requested_amount) < float(SUGGESTION_LOAN_STEP) else "increase_amount"
+        return {
+            "status": status,
+            "target_pd_pct": round(target, 2),
+            "requested_loan_amount": round(requested_amount, 2),
+            "suggested_loan_amount": round(suggested, 2),
+            "estimated_pd_pct": round(pd_suggested, 2),
+            "cap_loan_amount": round(cap_amount, 2),
+        }
+
+    pd_at_min = _score_pd_pct_for_amount(model_name, base_raw, min_amount)
+    if pd_at_min > target:
+        return {
+            "status": "unreachable",
+            "target_pd_pct": round(target, 2),
+            "requested_loan_amount": round(requested_amount, 2),
+            "suggested_loan_amount": None,
+            "estimated_pd_pct": round(pd_at_min, 2),
+            "min_loan_amount": round(min_amount, 2),
+        }
+
+    suggested = _search_max_loan_for_target(
+        base_raw,
+        model_name,
+        target_pd_pct=target,
+        low=min_amount,
+        high=requested_amount,
+    )
+    pd_suggested = _score_pd_pct_for_amount(model_name, base_raw, suggested)
+    status = "approved_as_is" if abs(suggested - requested_amount) < float(SUGGESTION_LOAN_STEP) else "reduce_amount"
+    return {
+        "status": status,
+        "target_pd_pct": round(target, 2),
+        "requested_loan_amount": round(requested_amount, 2),
+        "suggested_loan_amount": round(suggested, 2),
+        "estimated_pd_pct": round(pd_suggested, 2),
+    }
+
+
 def _confidence_band(calibrated_prob: float, calibration: dict) -> list[float]:
     uncertainty = 1.0 - abs(float(calibrated_prob) - 0.5) * 2.0
     half_width = 0.04 + 0.08 * max(0.0, uncertainty)
@@ -404,10 +599,59 @@ def _predict_nn(X15: np.ndarray) -> tuple[float, int]:
     return prob, int(prob >= thresh)
 
 
+def _predict_rf(X15: np.ndarray) -> tuple[float, int]:
+    """
+    Run a sklearn RandomForestClassifier on a single 15-feature vector.
+
+    The saved file may be either:
+      • a bare RandomForestClassifier  (most common), or
+      • a dict with keys {"model": <RF>, "threshold": <float>}.
+
+    Random Forests are scale-invariant so no scaler is applied unless the
+    artifact explicitly includes one. Some saved artifacts include the same
+    leading bias column used by CatBoost, so input shape is adapted to the
+    model's fitted feature count.
+    """
+    pkg = _load("random_forest")
+    if pkg is None:
+        raise RuntimeError("random_forest model not available")
+
+    # Unwrap dict wrapper if present
+    if isinstance(pkg, dict):
+        model  = pkg["model"]
+        thresh = float(pkg.get("threshold", 0.5))
+    else:
+        model  = pkg          # bare RandomForestClassifier
+        thresh = 0.5
+
+    X_in = _rf_input(model, X15, pkg)
+    prob = float(model.predict_proba(X_in)[0, 1])
+    return prob, int(prob >= thresh)
+
+
+def _rf_input(model: Any, X15: np.ndarray, pkg: Any | None = None) -> np.ndarray:
+    """Return the Random Forest input matrix expected by the saved artifact."""
+    n_features = int(getattr(model, "n_features_in_", len(X15)))
+    if n_features == len(X15):
+        return X15.reshape(1, -1)
+
+    if n_features == len(X15) + 1:
+        scaler = pkg.get("scaler") if isinstance(pkg, dict) else None
+        if scaler is not None:
+            return _preprocess(X15, scaler)
+        return np.c_[np.ones((1, 1)), X15.reshape(1, -1)]
+
+    raise ValueError(
+        f"Random Forest expects {n_features} features, but encoded input has {len(X15)} "
+        f"or {len(X15) + 1} with bias."
+    )
+
+
 _RUNNERS = {
     "logistic_regression": _predict_lr,
     "catboost": _predict_cb,
     "neural_network": _predict_nn,
+    "random_forest": _predict_rf,
 }
 
 
@@ -487,12 +731,17 @@ def _top_features(model_name: str, X15: np.ndarray, base_prob: float) -> list[di
 
 
 # Public API
-def predict(raw: dict) -> dict[str, dict | None]:
+def predict(raw: dict, *, include_suggestions: bool = True) -> dict[str, dict | None]:
     """
     Run all available models on raw borrower features.
     Returns {model_name: {probability, prediction, label, grade, decision}}
     or {model_name: None} when a model file is absent.
     """
+    try:
+        loan_amount = float(raw.get("loan_amnt", 0.0))
+    except (TypeError, ValueError):
+        loan_amount = 0.0
+
     X15 = _encode(raw)
 
     results: dict[str, dict | None] = {}
@@ -502,18 +751,33 @@ def predict(raw: dict) -> dict[str, dict | None]:
             calibrated_prob, calibration = _calibrate_probability(name, raw_prob)
             pd_pct = round(calibrated_prob * 100, 2)
             raw_pd_pct = round(raw_prob * 100, 2)
-            results[name] = {
+            confidence_band = _confidence_band(calibrated_prob, calibration)
+            expected_loss = _expected_loss_metrics(
+                pd_pct,
+                loan_amount,
+                confidence_band=confidence_band,
+            )
+            result_row = {
                 "probability":              pd_pct,
                 "raw_probability":          raw_pd_pct,
                 "calibrated_probability":   pd_pct,
                 "calibration":              calibration,
-                "confidence_band":          _confidence_band(calibrated_prob, calibration),
+                "confidence_band":          confidence_band,
                 "prediction":               pred,
                 "label":                    "Default" if pred == 1 else "No Default",
                 "grade":                    _risk_grade(pd_pct),
                 "decision":                 _decision(pd_pct),
                 "top_features":             _top_features(name, X15, raw_prob),
+                "expected_loss":            expected_loss,
             }
+            if include_suggestions:
+                result_row["approval_suggestion"] = _suggest_loan_amount(
+                    raw,
+                    name,
+                    target_pd_pct=SUGGESTION_TARGET_PD_PCT,
+                    current_pd_pct=pd_pct,
+                )
+            results[name] = result_row
         except RuntimeError:
             results[name] = None
         except Exception as exc:
@@ -683,13 +947,54 @@ def _explain_shap_nn(raw: dict) -> dict:
     }
 
 
+def _explain_shap_rf(raw: dict) -> dict:
+    """
+    Random-Forest feature attribution via feature ablation.
+
+    For each feature i, the contribution is estimated as:
+        φᵢ = (P(default | x) − P(default | x with feature i set to reference)) × 100 pp
+
+    The reference vector uses the training-data mean for numeric features and
+    0 for all one-hot dummies (equivalent to the MORTGAGE / DEBTCONSOLIDATION baseline).
+    Values are in percentage-point space, consistent with the NN ablation output.
+    """
+    pkg = _load("random_forest")
+    if pkg is None:
+        raise RuntimeError("random_forest model not available")
+
+    model = pkg["model"] if isinstance(pkg, dict) else pkg
+
+    X15      = _encode(raw)
+    base_prob, _ = _predict_rf(X15)
+
+    ref = X15.copy()
+    for idx, col in enumerate(FEATURE_COLS):
+        if col in _DUMMY_GROUP or col == "cb_person_default_on_file_Y":
+            ref[idx] = 0.0
+
+    contributions = np.zeros_like(X15, dtype=np.float64)
+    for idx in range(len(X15)):
+        if float(X15[idx]) == float(ref[idx]):
+            continue
+        ablated          = X15.copy()
+        ablated[idx]     = ref[idx]
+        ablated_prob     = float(model.predict_proba(_rf_input(model, ablated, pkg))[0, 1])
+        contributions[idx] = (base_prob - ablated_prob) * 100.0
+
+    return {
+        "model":       "random_forest",
+        "base_value":  round(base_prob * 100.0, 4),   # baseline PD in pp
+        "shap_values": _build_entries(X15, contributions),
+    }
+
+
 def explain_shap(raw: dict, model: str = "catboost") -> dict:
     """
     Return SHAP feature attributions for the given model.
 
     Args:
         raw:   borrower feature dict (same schema as predict())
-        model: "catboost", "logistic_regression", or "neural_network"
+        model: "catboost", "logistic_regression", "neural_network", or "random_forest"
 
     Returns:
         {model, base_value, shap_values: [{feature, display_name, raw_value, shap_value}]}
@@ -705,4 +1010,9 @@ def explain_shap(raw: dict, model: str = "catboost") -> dict:
         return _explain_shap_lr(raw)
     if model == "neural_network":
         return _explain_shap_nn(raw)
-    raise ValueError(f"Unknown model {model!r}. Choose 'catboost', 'logistic_regression', or 'neural_network'.")
+    if model == "random_forest":
+        return _explain_shap_rf(raw)
+    raise ValueError(
+        f"Unknown model {model!r}. "
+        "Choose 'catboost', 'logistic_regression', 'neural_network', or 'random_forest'."
+    )

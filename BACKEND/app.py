@@ -250,8 +250,8 @@ def _rag_cached(*, payload: dict, trace: dict | None, call_fn):
     return result
 
 
-def _predict_cached(*, payload: dict, trace: dict | None, label: str):
-    cache_key = _cache_key("predict", payload)
+def _predict_cached(*, payload: dict, trace: dict | None, label: str, include_suggestions: bool = True):
+    cache_key = _cache_key("predict", {"payload": payload, "include_suggestions": include_suggestions})
     if PREDICT_CACHE_TTL_S > 0:
         cached = PREDICT_CACHE.get(cache_key)
         if cached is not None:
@@ -259,14 +259,22 @@ def _predict_cached(*, payload: dict, trace: dict | None, label: str):
             add_event(trace, "predict_cache_hit", {"cache_key": cache_key, "label": label})
             return cached
     inc_counter("predict_cache_miss")
-    predict_fn = remote_predict if remote_tabular_enabled() else ml_predict
-    result = _run_with_retries(
-        lambda: predict_fn(payload),
-        timeout_s=PREDICT_TIMEOUT_S,
-        retries=PREDICT_RETRIES,
-        trace=trace,
-        label=label,
-    )
+    if remote_tabular_enabled():
+        result = _run_with_retries(
+            lambda: remote_predict(payload),
+            timeout_s=PREDICT_TIMEOUT_S,
+            retries=PREDICT_RETRIES,
+            trace=trace,
+            label=label,
+        )
+    else:
+        result = _run_with_retries(
+            lambda: ml_predict(payload, include_suggestions=include_suggestions),
+            timeout_s=PREDICT_TIMEOUT_S,
+            retries=PREDICT_RETRIES,
+            trace=trace,
+            label=label,
+        )
     if PREDICT_CACHE_TTL_S > 0:
         PREDICT_CACHE.set(cache_key, result)
     return result
@@ -408,7 +416,7 @@ class ScenarioSimulationRequest(BaseModel):
     include_top_drivers: bool = Field(default=False)
     drivers_model: str = Field(
         default="catboost",
-        pattern="^(catboost|logistic_regression|neural_network)$",
+        pattern="^(catboost|logistic_regression|neural_network|random_forest)$",
     )
 
 
@@ -578,7 +586,7 @@ def _batch_score(body: BatchScoreRequest) -> dict:
             "row": idx,
             "input": standardize_applicant(payload),
             "derived_metrics": derived_features(payload),
-            "scores": ml_predict(payload),
+            "scores": ml_predict(payload, include_suggestions=False),
         })
     return {"count": len(rows), "rows": rows}
 
@@ -818,7 +826,7 @@ def predict(body: PredictRequest) -> dict:
     trace = start_trace("/predict")
     try:
         payload = body.model_dump()
-        result = _predict_cached(payload=payload, trace=trace, label="predict")
+        result = _predict_cached(payload=payload, trace=trace, label="predict", include_suggestions=True)
         finish_trace(trace, status="ok")
         return result
     except TimeoutError as exc:
@@ -835,7 +843,12 @@ def simulate_scenarios(body: ScenarioSimulationRequest) -> dict:
     trace = start_trace("/scenario")
     try:
         baseline_input = body.base_applicant.model_dump()
-        baseline_scores = _predict_cached(payload=baseline_input, trace=trace, label="scenario_baseline")
+        baseline_scores = _predict_cached(
+            payload=baseline_input,
+            trace=trace,
+            label="scenario_baseline",
+            include_suggestions=False,
+        )
         baseline = {
             "input": baseline_input,
             "derived_metrics": _derived_applicant_metrics(baseline_input),
@@ -852,7 +865,12 @@ def simulate_scenarios(body: ScenarioSimulationRequest) -> dict:
             )
             candidate_input = {**baseline_input, **overrides}
             validated_input = PredictRequest.model_validate(candidate_input).model_dump()
-            scenario_scores = _predict_cached(payload=validated_input, trace=trace, label="scenario")
+            scenario_scores = _predict_cached(
+                payload=validated_input,
+                trace=trace,
+                label="scenario",
+                include_suggestions=False,
+            )
             changes = _scenario_changes(baseline_input, overrides)
 
             item = {
@@ -893,8 +911,8 @@ def explain(
     body: PredictRequest,
     model: str = Query(
         default="catboost",
-        pattern="^(catboost|logistic_regression|neural_network)$",
-        description="Model to explain: 'catboost', 'logistic_regression', or 'neural_network'",
+        pattern="^(catboost|logistic_regression|neural_network|random_forest)$",
+        description="Model to explain: 'catboost', 'logistic_regression', 'neural_network', or 'random_forest'",
     ),
 ) -> dict:
     """Return SHAP feature attributions for a single borrower."""

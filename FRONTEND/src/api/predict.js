@@ -7,7 +7,7 @@ const _timeout = (ms, ctrl) => setTimeout(() => ctrl.abort(), ms);
  * from all available ML models.
  *
  * @param {object} data  Raw borrower features
- * @returns {Promise<object>}  { logistic_regression, catboost }
+ * @returns {Promise<object>}  { logistic_regression, catboost, neural_network, random_forest }
  */
 export async function predict(data) {
   const controller = new AbortController();
@@ -80,7 +80,7 @@ export async function simulateScenarios(baseApplicant, scenarios, options = {}) 
  * Fetch SHAP feature attributions for one borrower from the chosen model.
  *
  * @param {object} data   Borrower features (same shape as predict())
- * @param {string} model  'catboost' | 'logistic_regression'
+ * @param {string} model  'catboost' | 'logistic_regression' | 'neural_network' | 'random_forest'
  * @returns {Promise<object>}  { model, base_value, shap_values: [...] }
  */
 export async function explainShap(data, model = 'catboost') {

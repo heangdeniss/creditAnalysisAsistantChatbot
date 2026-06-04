@@ -29,6 +29,7 @@ const MODEL_LABELS = {
   logistic_regression: 'Logistic Regression',
   catboost: 'CatBoost',
   neural_network: 'Neural Network',
+  random_forest: 'Random Forest',
 };
 
 const DECISION_COLORS = {
