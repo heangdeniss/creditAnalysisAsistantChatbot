@@ -47,6 +47,10 @@ class TTLCache:
             while len(self._data) > self._max_size:
                 self._data.popitem(last=False)
 
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
     def stats(self) -> dict[str, int]:
         with self._lock:
             return {"size": len(self._data), "max_size": self._max_size}

@@ -97,6 +97,12 @@ function formatProbability(row) {
   return `${Number(row.probability).toFixed(1)}%`;
 }
 
+function formatPolicy(policy) {
+  if (!policy) return '';
+  const score = Number(policy.policy_score ?? policy.reward ?? 0).toFixed(2);
+  return `${policy.recommendation} | score ${score}`;
+}
+
 function formatComparison(baseline, scenario) {
   if (!baseline || !scenario) return 'N/A';
   if (baseline.error || scenario.error) return 'Error';
@@ -358,6 +364,7 @@ export default function ScenarioPanel({ baseApplicant }) {
                   const lti = scenario.derived_metrics?.loan_to_income_pct;
                   const drivers = scenario.top_drivers?.drivers ?? [];
                   const changes = Array.isArray(scenario.changes) ? scenario.changes : [];
+                  const policyText = formatPolicy(score?.policy_recommendation);
                   return (
                     <div className="scenario-result-row" key={scenario.scenario_id ?? scenario.name}>
                       <div>
@@ -383,6 +390,9 @@ export default function ScenarioPanel({ baseApplicant }) {
                         ) : null}
                         {delta?.impact_summary ? (
                           <div className="scenario-impact">{delta.impact_summary}</div>
+                        ) : null}
+                        {policyText ? (
+                          <div className="scenario-policy">{policyText}</div>
                         ) : null}
                       </div>
                       <strong>{formatComparison(baselineScore, score)}</strong>

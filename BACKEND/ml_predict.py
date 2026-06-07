@@ -23,6 +23,7 @@ import joblib
 import numpy as np
 
 from feature_store import standardize_applicant
+from policy_learning import score_candidates
 
 # Paths
 _ML_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "ML_Model"))
@@ -57,6 +58,14 @@ SUGGESTION_LOAN_STEP = _env_float("SUGGESTION_LOAN_STEP", 50.0)
 SUGGESTION_MAX_ITER = _env_int("SUGGESTION_MAX_ITER", 24)
 SUGGESTION_MAX_LOAN = _env_float("SUGGESTION_MAX_LOAN", 50000.0)
 SUGGESTION_MAX_LOAN_MULTIPLIER = _env_float("SUGGESTION_MAX_LOAN_MULTIPLIER", 2.0)
+POLICY_REVIEW_COST = _env_float("POLICY_REVIEW_COST", 35.0)
+POLICY_DOC_COST = _env_float("POLICY_DOC_COST", 20.0)
+POLICY_APPROVAL_VALUE = _env_float("POLICY_APPROVAL_VALUE", 75.0)
+POLICY_CUSTOMER_RATE_WEIGHT = _env_float("POLICY_CUSTOMER_RATE_WEIGHT", 8.0)
+POLICY_FAIRNESS_PENALTY = _env_float("POLICY_FAIRNESS_PENALTY", 125.0)
+POLICY_TARGET_PD_PCT = _env_float("POLICY_TARGET_PD_PCT", SUGGESTION_TARGET_PD_PCT)
+POLICY_REVIEW_PD_PCT = _env_float("POLICY_REVIEW_PD_PCT", 10.0)
+POLICY_MAX_APPROVAL_PD_PCT = _env_float("POLICY_MAX_APPROVAL_PD_PCT", 15.0)
 
 _MODEL_FILES: dict[str, str] = {
     "logistic_regression": os.path.join(_ML_DIR, "Logistic regression model.joblib"),
@@ -496,6 +505,215 @@ def _suggest_loan_amount(
     }
 
 
+def _score_pd_pct_for_payload(model_name: str, raw: dict) -> float:
+    X15 = _encode(raw)
+    raw_prob, _ = _RUNNERS[model_name](X15)
+    calibrated_prob, _ = _calibrate_probability(model_name, raw_prob)
+    return float(calibrated_prob) * 100.0
+
+
+def _policy_expected_profit(pd_pct: float, loan_amount: float, interest_rate: float) -> float:
+    interest_income = max(float(loan_amount), 0.0) * max(float(interest_rate), 0.0) / 100.0
+    expected_loss = _expected_loss_metrics(pd_pct, loan_amount)["amount"]
+    return round(float(interest_income) - float(expected_loss), 2)
+
+
+def _policy_fairness_penalty(action: str, pd_pct: float, applicant: dict) -> float:
+    """Guard against policy actions that contradict the same risk bands for all borrowers."""
+    penalty = 0.0
+    if action in {"approve", "conditional_rate", "reduce_loan_amount"} and pd_pct > POLICY_MAX_APPROVAL_PD_PCT:
+        penalty += POLICY_FAIRNESS_PENALTY
+    if action == "reject" and pd_pct <= POLICY_TARGET_PD_PCT:
+        penalty += POLICY_FAIRNESS_PENALTY
+
+    try:
+        loan_amount = float(applicant.get("loan_amnt", 0.0))
+        income = max(float(applicant.get("person_income", 0.0)), 1.0)
+        interest_rate = float(applicant.get("loan_int_rate", 0.0))
+    except (TypeError, ValueError):
+        return penalty
+
+    loan_to_income_pct = loan_amount / income * 100.0
+    if action in {"approve", "conditional_rate"} and loan_to_income_pct > 60:
+        penalty += POLICY_FAIRNESS_PENALTY * 0.5
+    if action == "conditional_rate" and interest_rate > 30:
+        penalty += POLICY_FAIRNESS_PENALTY * 0.5
+    return round(penalty, 2)
+
+
+def _policy_candidate(
+    *,
+    action: str,
+    label: str,
+    applicant: dict,
+    model_name: str,
+    reason: str,
+    operational_cost: float = 0.0,
+    customer_penalty: float = 0.0,
+    approval_bonus: float = 0.0,
+) -> dict:
+    pd_pct = round(_score_pd_pct_for_payload(model_name, applicant), 2)
+    loan_amount = float(applicant.get("loan_amnt", 0.0))
+    interest_rate = float(applicant.get("loan_int_rate", 0.0))
+    expected_profit = _policy_expected_profit(pd_pct, loan_amount, interest_rate)
+    fairness_penalty = _policy_fairness_penalty(action, pd_pct, applicant)
+    reward = round(
+        expected_profit
+        + approval_bonus
+        - float(operational_cost)
+        - float(customer_penalty)
+        - fairness_penalty,
+        2,
+    )
+    return {
+        "action": action,
+        "label": label,
+        "reward": reward,
+        "pd_pct": pd_pct,
+        "loan_amount": round(loan_amount, 2),
+        "interest_rate": round(interest_rate, 2),
+        "expected_profit": expected_profit,
+        "operational_cost": round(float(operational_cost), 2),
+        "customer_penalty": round(float(customer_penalty), 2),
+        "fairness_penalty": fairness_penalty,
+        "reason": reason,
+    }
+
+
+def _reject_or_hold_candidate(action: str, label: str, pd_pct: float, reason: str, *, cost: float = 0.0) -> dict:
+    high_risk_credit = max(0.0, (float(pd_pct) - POLICY_REVIEW_PD_PCT) * 8.0)
+    fairness_penalty = POLICY_FAIRNESS_PENALTY if action == "reject" and pd_pct <= POLICY_TARGET_PD_PCT else 0.0
+    reward = round(high_risk_credit - cost - fairness_penalty, 2)
+    return {
+        "action": action,
+        "label": label,
+        "reward": reward,
+        "pd_pct": round(float(pd_pct), 2),
+        "loan_amount": None,
+        "interest_rate": None,
+        "expected_profit": 0.0,
+        "operational_cost": round(float(cost), 2),
+        "customer_penalty": 0.0,
+        "fairness_penalty": round(fairness_penalty, 2),
+        "reason": reason,
+    }
+
+
+def _policy_recommendation(
+    base_raw: dict,
+    model_name: str,
+    *,
+    current_pd_pct: float,
+    confidence_band: list[float] | None,
+    approval_suggestion: dict | None,
+) -> dict:
+    """Contextual-bandit style offer policy evaluated with the current PD model."""
+    base = standardize_applicant(base_raw)
+    candidates = [
+        _policy_candidate(
+            action="approve",
+            label="Approve as-is",
+            applicant=base,
+            model_name=model_name,
+            approval_bonus=POLICY_APPROVAL_VALUE,
+            reason="Keeps the requested offer when risk-adjusted return clears the policy reward.",
+        ),
+        _reject_or_hold_candidate(
+            "manual_review",
+            "Send to manual review",
+            current_pd_pct,
+            "Use a human review when the model risk band is uncertain or close to a cutoff.",
+            cost=POLICY_REVIEW_COST,
+        ),
+        _reject_or_hold_candidate(
+            "request_documents",
+            "Request more documents",
+            current_pd_pct,
+            "Collect more evidence before committing capital on an uncertain application.",
+            cost=POLICY_DOC_COST,
+        ),
+        _reject_or_hold_candidate(
+            "reject",
+            "Reject",
+            current_pd_pct,
+            "Avoid extending credit when predicted loss outweighs approval value.",
+        ),
+    ]
+
+    suggested_amount = None
+    if approval_suggestion:
+        suggested_amount = approval_suggestion.get("suggested_loan_amount")
+    if isinstance(suggested_amount, (int, float)) and suggested_amount >= SUGGESTION_MIN_LOAN:
+        reduced = dict(base)
+        reduced["loan_amnt"] = float(suggested_amount)
+        reduction = max(0.0, float(base.get("loan_amnt", 0.0)) - float(suggested_amount))
+        if reduction > 0:
+            candidates.append(_policy_candidate(
+                action="reduce_loan_amount",
+                label=f"Reduce loan to ${suggested_amount:,.0f}",
+                applicant=reduced,
+                model_name=model_name,
+                approval_bonus=POLICY_APPROVAL_VALUE * 0.7,
+                customer_penalty=reduction * 0.015,
+                reason="Lower exposure can improve approval odds while limiting expected default loss.",
+            ))
+
+    current_rate = float(base.get("loan_int_rate", 0.0))
+    for step in (0.5, 1.0, 2.0):
+        changed = dict(base)
+        changed["loan_int_rate"] = min(40.0, round(current_rate + step, 2))
+        if changed["loan_int_rate"] == current_rate:
+            continue
+        candidates.append(_policy_candidate(
+            action="conditional_rate",
+            label=f"Approve if rate is at least {changed['loan_int_rate']:.2f}%",
+            applicant=changed,
+            model_name=model_name,
+            approval_bonus=POLICY_APPROVAL_VALUE * 0.6,
+            customer_penalty=step * POLICY_CUSTOMER_RATE_WEIGHT,
+            reason="A higher rate can improve risk-adjusted return, but is penalized for customer burden.",
+        ))
+
+    if confidence_band and len(confidence_band) >= 2:
+        band_width = max(0.0, float(confidence_band[1]) - float(confidence_band[0]))
+        if band_width > 18:
+            candidates.append(_reject_or_hold_candidate(
+                "request_documents",
+                "Request more documents",
+                current_pd_pct,
+                "The confidence band is wide, so more documentation is preferred before a final decision.",
+                cost=POLICY_DOC_COST * 0.5,
+            ))
+
+    candidates = score_candidates(base, candidates)
+    candidates.sort(key=lambda row: row["policy_score"], reverse=True)
+    best = candidates[0]
+    return {
+        "policy_type": "linucb_contextual_bandit",
+        "recommended_action": best["action"],
+        "recommendation": best["label"],
+        "reward": best["reward"],
+        "policy_score": best["policy_score"],
+        "learned_reward": best.get("learned_reward", 0.0),
+        "exploration_bonus": best.get("exploration_bonus", 0.0),
+        "policy_updates": best.get("policy_updates", 0),
+        "reason": best["reason"],
+        "candidate_pd_pct": best["pd_pct"],
+        "offer": {
+            "loan_amount": best["loan_amount"],
+            "interest_rate": best["interest_rate"],
+        },
+        "reward_components": {
+            "expected_profit": best["expected_profit"],
+            "operational_cost": best["operational_cost"],
+            "customer_penalty": best["customer_penalty"],
+            "fairness_penalty": best["fairness_penalty"],
+            "approval_value": POLICY_APPROVAL_VALUE,
+        },
+        "alternatives": candidates[1:4],
+    }
+
+
 def _confidence_band(calibrated_prob: float, calibration: dict) -> list[float]:
     uncertainty = 1.0 - abs(float(calibrated_prob) - 0.5) * 2.0
     half_width = 0.04 + 0.08 * max(0.0, uncertainty)
@@ -757,6 +975,12 @@ def predict(raw: dict, *, include_suggestions: bool = True) -> dict[str, dict | 
                 loan_amount,
                 confidence_band=confidence_band,
             )
+            approval_suggestion = _suggest_loan_amount(
+                raw,
+                name,
+                target_pd_pct=SUGGESTION_TARGET_PD_PCT,
+                current_pd_pct=pd_pct,
+            )
             result_row = {
                 "probability":              pd_pct,
                 "raw_probability":          raw_pd_pct,
@@ -771,12 +995,14 @@ def predict(raw: dict, *, include_suggestions: bool = True) -> dict[str, dict | 
                 "expected_loss":            expected_loss,
             }
             if include_suggestions:
-                result_row["approval_suggestion"] = _suggest_loan_amount(
-                    raw,
-                    name,
-                    target_pd_pct=SUGGESTION_TARGET_PD_PCT,
-                    current_pd_pct=pd_pct,
-                )
+                result_row["approval_suggestion"] = approval_suggestion
+            result_row["policy_recommendation"] = _policy_recommendation(
+                raw,
+                name,
+                current_pd_pct=pd_pct,
+                confidence_band=confidence_band,
+                approval_suggestion=approval_suggestion,
+            )
             results[name] = result_row
         except RuntimeError:
             results[name] = None

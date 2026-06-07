@@ -237,6 +237,7 @@ export default function PredictPanel({ llmModel = 'llama-1b', theme = 'dark' }) 
             const isShapOpen = shapOpen === key;
             const expectedLoss = r?.expected_loss ?? null;
             const suggestion = r?.approval_suggestion ?? null;
+            const policy = r?.policy_recommendation ?? null;
             const lossAmount = asNumber(expectedLoss?.amount);
             const stressedLoss = asNumber(expectedLoss?.stressed_amount);
             const stressedPd = asNumber(expectedLoss?.stressed_pd_pct);
@@ -323,6 +324,7 @@ export default function PredictPanel({ llmModel = 'llama-1b', theme = 'dark' }) 
                           )}
                         </div>
                       )}
+                      <PolicyRecommendation policy={policy} />
                       <div className="result-prob">
                         <div className="result-prob-bar">
                           <div className="result-prob-fill" style={{ width: `${Math.min(r.probability, 100)}%` }} />
@@ -881,6 +883,50 @@ function ExplainabilityMini({ result }) {
               <strong>{Number(feature.magnitude).toFixed(2)}</strong>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PolicyRecommendation({ policy }) {
+  if (!policy) return null;
+  const components = policy.reward_components ?? {};
+  const offer = policy.offer ?? {};
+  const profit = asNumber(components.expected_profit);
+  const fairnessPenalty = asNumber(components.fairness_penalty);
+  const candidatePd = asNumber(policy.candidate_pd_pct);
+  const offerAmount = asNumber(offer.loan_amount);
+  const offerRate = asNumber(offer.interest_rate);
+  const policyScore = asNumber(policy.policy_score);
+  const learnedReward = asNumber(policy.learned_reward);
+  const explorationBonus = asNumber(policy.exploration_bonus);
+  const updates = Number(policy.policy_updates ?? 0);
+
+  return (
+    <div className="policy-box">
+      <div className="policy-head">
+        <span>Policy</span>
+        <strong>{policy.recommendation}</strong>
+      </div>
+      <div className="policy-meta">
+        <span>Score {(policyScore ?? Number(policy.reward ?? 0)).toFixed(2)}</span>
+        <span>Reward {Number(policy.reward ?? 0).toFixed(2)}</span>
+        {candidatePd !== null ? <span>PD {candidatePd.toFixed(1)}%</span> : null}
+        {profit !== null ? <span>Profit {formatCurrency(profit, 2)}</span> : null}
+        {fairnessPenalty !== null && fairnessPenalty > 0 ? <span>Guardrail -{formatCurrency(fairnessPenalty, 0)}</span> : null}
+      </div>
+      {(updates > 0 || learnedReward !== null || explorationBonus !== null) && (
+        <div className="policy-meta">
+          {updates > 0 ? <span>Learned from {updates} outcome{updates === 1 ? '' : 's'}</span> : null}
+          {learnedReward !== null ? <span>Learned {learnedReward.toFixed(2)}</span> : null}
+          {explorationBonus !== null ? <span>Explore {explorationBonus.toFixed(2)}</span> : null}
+        </div>
+      )}
+      {(offerAmount !== null || offerRate !== null) && (
+        <div className="policy-meta">
+          {offerAmount !== null ? <span>Offer {formatCurrency(offerAmount)}</span> : null}
+          {offerRate !== null ? <span>Rate {offerRate.toFixed(2)}%</span> : null}
         </div>
       )}
     </div>

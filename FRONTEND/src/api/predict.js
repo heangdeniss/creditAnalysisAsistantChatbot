@@ -169,3 +169,65 @@ export async function fetchMetricsSummary() {
     clearTimeout(timer);
   }
 }
+
+/**
+ * Fetch contextual-bandit learner status.
+ *
+ * @returns {Promise<object>} policy learner summary
+ */
+export async function fetchPolicySummary() {
+  const controller = new AbortController();
+  const timer = _timeout(30_000, controller);
+
+  try {
+    const res = await fetch(`${API}/policy/summary`, {
+      method:  'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal:  controller.signal,
+    });
+
+    if (!res.ok) {
+      const { detail } = await res.json().catch(() => ({}));
+      throw new Error(detail ?? res.statusText);
+    }
+
+    return res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Policy summary timed out (30 s).');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Send realized outcome feedback to train the contextual-bandit policy.
+ *
+ * @param {object} feedback Includes action, applicant, and either reward or outcome fields
+ * @returns {Promise<object>} learner update result
+ */
+export async function submitPolicyFeedback(feedback) {
+  const controller = new AbortController();
+  const timer = _timeout(30_000, controller);
+
+  try {
+    const res = await fetch(`${API}/policy/feedback`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal:  controller.signal,
+      body:    JSON.stringify(feedback),
+    });
+
+    if (!res.ok) {
+      const { detail } = await res.json().catch(() => ({}));
+      throw new Error(Array.isArray(detail) ? detail.map(d => d.msg).join('; ') : detail ?? res.statusText);
+    }
+
+    return res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Policy feedback timed out (30 s).');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}

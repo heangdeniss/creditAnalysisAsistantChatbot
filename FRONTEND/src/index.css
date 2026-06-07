@@ -876,6 +876,44 @@ html[data-theme="dark"] .theme-toggle-track::after {
   flex-wrap: wrap;
 }
 
+.policy-box {
+  border: 1px solid rgba(91, 127, 255, .26);
+  background: rgba(91, 127, 255, .08);
+  border-radius: 8px;
+  padding: 8px 9px;
+  margin: 8px 0;
+}
+
+.policy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+
+.policy-head span {
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.policy-head strong {
+  color: var(--text);
+  font-size: .78rem;
+  text-align: right;
+}
+
+.policy-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  color: var(--muted);
+  font-size: .7rem;
+}
+
 /* Clickable result cards */
 .result-card-clickable {
   cursor: pointer;
@@ -1588,6 +1626,13 @@ html[data-theme="dark"] .theme-toggle-track::after {
   margin-top: 4px;
   font-size: 0.72rem;
   color: var(--text);
+}
+
+.scenario-policy {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--accent-h);
+  font-weight: 700;
 }
 
 .scenario-delta-up,

@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from typing import Annotated
 from contextlib import asynccontextmanager
-from threading import Event
+from threading import Event, Thread
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -55,6 +55,7 @@ from ml_predict import load_all_models, predict as ml_predict, explain_shap
 from chroma_loader import chunk_texts, embed_query, load_chroma_db
 from feature_store import derived_features, encode_applicant, feature_contract, standardize_applicant
 from job_queue import get_job, list_jobs, queue_stats, submit_job
+from policy_learning import ACTIONS as POLICY_ACTIONS, policy_summary, record_feedback
 from service_clients import remote_batch_score, remote_predict, remote_tabular_enabled
 from speech_to_text import transcribe_wav_bytes
 from observability import (
@@ -106,16 +107,27 @@ async def lifespan(_: FastAPI):
         print("[startup] SKIP_STARTUP_LOAD=1 — skipping heavy model loads")
         yield
         return
-    print("[startup] loading embeddings + retriever …")
-    get_retriever()
-    if external_generation_enabled():
-        print("[startup] using external LLM model server")
-    else:
-        print(f"[startup] loading {DEFAULT_MODEL} …")
-        load_model(DEFAULT_MODEL)
-    print("[startup] loading ML models …")
-    load_all_models()
-    print("[startup] ✅ ready")
+
+    def _load_bg():
+        try:
+            print("[startup] loading embeddings + retriever …")
+            get_retriever()
+            if external_generation_enabled():
+                print("[startup] using external LLM model server")
+            else:
+                print(f"[startup] loading {DEFAULT_MODEL} …")
+                load_model(DEFAULT_MODEL)
+            print("[startup] loading ML models …")
+            load_all_models()
+            print("[startup] ✅ ready")
+        except Exception as exc:
+            print(f"[startup] ❌ ERROR loading models: {exc}")
+
+    # Start loading heavy models in the background so Uvicorn can start immediately.
+    # The /health endpoint will return 503 until everything is ready.
+    thread = Thread(target=_load_bg, daemon=True)
+    thread.start()
+    
     yield
 
 
@@ -439,6 +451,25 @@ class RagEvalRequest(BaseModel):
 
 class BatchScoreRequest(BaseModel):
     applicants: list[PredictRequest] = Field(..., min_length=1, max_length=1000)
+
+
+class PolicyFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(..., pattern="^(approve|reject|manual_review|reduce_loan_amount|conditional_rate|request_documents)$")
+    applicant: PredictRequest
+    model: str | None = Field(default=None, pattern="^(logistic_regression|catboost|neural_network|random_forest)$")
+    candidate: dict | None = Field(default=None)
+    reward: float | None = None
+    pd_pct: float | None = Field(default=None, ge=0, le=100)
+    expected_profit: float | None = None
+    realized_profit: float | None = None
+    defaulted: bool | None = None
+    loss_amount: float | None = Field(default=None, ge=0)
+    customer_accepted: bool | None = None
+    officer_override: bool | None = None
+    fairness_flag: bool | None = None
+    feedback_id: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 def _derived_applicant_metrics(applicant: dict) -> dict:
@@ -834,6 +865,30 @@ def predict(body: PredictRequest) -> dict:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except Exception as exc:
         finish_trace(trace, status="error", error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/policy/summary")
+def get_policy_summary() -> dict:
+    """Return contextual-bandit learner status and per-action update counts."""
+    return {
+        **policy_summary(),
+        "available_actions": list(POLICY_ACTIONS),
+    }
+
+
+@app.post("/policy/feedback")
+def submit_policy_feedback(body: PolicyFeedbackRequest) -> dict:
+    """Train the contextual bandit from a realized policy outcome."""
+    try:
+        payload = body.model_dump(exclude_none=True)
+        payload["applicant"] = body.applicant.model_dump()
+        result = record_feedback(payload)
+        PREDICT_CACHE.clear()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
