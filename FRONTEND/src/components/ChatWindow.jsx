@@ -1,3 +1,4 @@
+import '../style/ChatWindow.css';
 import { useEffect, useRef } from 'react';
 import MessageBubble from './MessageBubble';
 

@@ -1,0 +1,340 @@
+/* ═══════════════════════════════════════════════════════════════
+   TOPBAR
+   ═══════════════════════════════════════════════════════════════ */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.topbar-left { display: flex; align-items: center; gap: 10px; }
+.topbar-logo  { font-size: 1.3rem; }
+.topbar-title { font-size: 0.95rem; font-weight: 600; }
+
+.pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 99px;
+  letter-spacing: .03em;
+}
+.pill-idle  { background: rgba(61,219,130,.15); color: var(--green); }
+.pill-busy  { background: rgba(245,197,66,.15);  color: var(--yellow); animation: pulse 1.2s infinite; }
+.pill-error { background: rgba(255,95,95,.15);   color: var(--error); }
+
+@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+
+/* ═══════════════════════════════════════════════════════════════
+   TABS
+   ═══════════════════════════════════════════════════════════════ */
+.tab-bar { display: flex; gap: 4px; }
+.tab-bar { margin-left: auto; }
+
+.model-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.model-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.model-select:focus {
+  border-color: var(--accent);
+}
+
+.model-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.model-switch-state {
+  color: var(--yellow);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.topbar-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.topbar-toggle input { accent-color: var(--accent); cursor: pointer; }
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 10px 4px 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent-h);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.theme-toggle-track {
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--border);
+  position: relative;
+  flex-shrink: 0;
+}
+
+.theme-toggle-track::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  background: var(--text);
+  transition: transform .2s ease, background .2s ease;
+}
+
+html[data-theme="dark"] .theme-toggle-track::after {
+  transform: translateX(12px);
+  background: var(--accent);
+}
+
+.theme-toggle-text {
+  font-size: 0.76rem;
+}
+
+.tab-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 5px 14px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.tab-btn:hover        { background: var(--surface2); color: var(--text); }
+.tab-btn.tab-active   { background: var(--accent-dim); color: var(--accent-h); border-color: var(--accent); }
+
+/* ═══════════════════════════════════════════════════════════════
+   RESPONSIVE — tablet / mobile
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Tablet (≤ 900 px): narrow sidebar ──────────────────────── */
+@media (max-width: 900px) {
+  :root { --sidebar: 200px; }
+  .sidebar-brand strong { font-size: 0.9rem; }
+  .prompt-btn { font-size: 0.75rem; }
+}
+
+/* ── Mobile (≤ 640 px): hide sidebar, stack everything ─────── */
+@media (max-width: 640px) {
+  /* Collapse sidebar off-screen */
+  .sidebar { display: none; }
+
+  /* Chat view */
+  .chat-window { padding: 14px 10px; gap: 14px; }
+  .msg { max-width: 100%; }
+
+  /* Topbar */
+  .topbar { padding: 10px 14px; gap: 6px; }
+  .topbar-title { font-size: 0.85rem; }
+  .tab-btn { padding: 4px 10px; font-size: 0.76rem; }
+  .tab-bar { order: 4; width: 100%; margin-left: 0; }
+  .model-switch { margin-left: auto; }
+  .model-select { max-width: 145px; }
+  .pill { margin-left: 0; }
+
+  /* Input bar */
+  .input-bar { padding: 8px 10px 10px; }
+  .input-hint { display: none; }
+
+  /* Predict page */
+  .predict-page { padding: 14px 10px; }
+  .predict-form,
+  .predict-results { padding: 14px; }
+
+  /* Result popup fills screen on mobile */
+  .rchat-backdrop { padding: 0; align-items: flex-end; }
+  .rchat-panel {
+    border-radius: 14px 14px 0 0;
+    max-width: 100%;
+    height: 88vh;
+    max-height: 88vh;
+  }
+}
+
+
+/* Card footer — holds chat hint + SHAP toggle side-by-side */
+.result-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+/* When SHAP panel is open, square the card's bottom corners */
+.result-card-shap-open { border-radius: 10px 10px 0 0 !important; }
+
+/* SHAP toggle button (lives inside the result card) */
+.shap-toggle-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+  flex-shrink: 0;
+}
+.shap-toggle-btn:hover          { border-color: var(--accent); color: var(--accent); }
+.shap-toggle-btn-active         { border-color: var(--accent); color: var(--accent-h); }
+
+/* SHAP panel — attaches below the result card */
+.shap-panel {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  padding: 14px 16px 16px;
+  animation: shap-in .15s ease;
+}
+@keyframes shap-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.shap-error-panel {
+  color: var(--error);
+  font-size: 0.82rem;
+}
+
+.shap-loading-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.shap-header { margin-bottom: 10px; }
+
+.shap-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Title row holds the title + model chip side-by-side */
+.shap-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.shap-model-chip {
+  font-size: 0.6rem;
+  font-weight: 700;
+  background: var(--accent-dim);
+  color: var(--accent-h);
+  border: 1px solid var(--accent);
+  border-radius: 20px;
+  padding: 1px 7px;
+  letter-spacing: 0.02em;
+}
+
+.shap-subtitle {
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.shap-legend-pos { color: #ef4444; }
+.shap-legend-neg { color: #3ddb82; }
+
+/* SVG waterfall chart ─────────────────────────────────────── */
+.shap-svg { font-family: inherit; overflow: visible; display: block; }
+
+/* SVG text layers */
+.shap-svg-label     { font-size: 11px;   fill: #606a8a; }
+.shap-svg-spec      { font-size: 11.5px; font-weight: 700; fill: #dde3f5; }
+.shap-svg-val       { font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.shap-svg-val-pos   { fill: #ef4444; }
+.shap-svg-val-neg   { fill: #3ddb82; }
+.shap-svg-val-muted { font-size: 10.5px; fill: #606a8a; }
+.shap-svg-threshold { font-size: 9px;    fill: #4b5a8a; }
+.shap-svg-axis-text { font-size: 9.5px;  fill: #606a8a; }
+
+/* Bars — hover dims slightly; row tint on alternating rows */
+.shap-svg-bar { transition: opacity 0.15s; }
+.shap-row-g:hover .shap-svg-bar   { opacity: 0.72; }
+.shap-row-g:hover .shap-svg-label { fill: #dde3f5; }
+.shap-row-bg { fill: rgba(148, 163, 184, 0.03); }
+
+/* Connectors and dots */
+.shap-svg-conn      { stroke: #475569; stroke-width: 0.8px; }
+.shap-svg-dot-base  { fill: #1c2033; stroke: #606a8a; stroke-width: 1.5px; }
+.shap-svg-dot-final { fill: #5b7fff; stroke: #7b9aff; stroke-width: 2px; }
+
+/* X-axis */
+.shap-svg-axis-line { stroke: #252a40; stroke-width: 0.8px; }
+.shap-svg-axis-tick { stroke: #475569; stroke-width: 0.8px; }
+
+/* Legacy colour tokens still used in result-card footers */
+.shap-val-pos { color: #ef4444; }
+.shap-val-neg { color: #3ddb82; }
+
+/* ── Full-width SHAP section (below predict-layout) ─────────────────────── */
+.shap-fw-wrap {
+  max-width: 1100px;
+  margin: 20px auto 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 22px 24px 18px;
+}
+/* Loading / error states inside standalone pane */
+.shap-sa-msg {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  padding: 8px 0;
+}
+.shap-sa-loading { color: var(--muted); }
+.shap-sa-error   { color: var(--error); }
+
+

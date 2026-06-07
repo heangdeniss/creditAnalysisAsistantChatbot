@@ -1,3 +1,4 @@
+import '../style/Sidebar.css';
 const PROMPTS = [
   'What is credit risk?',
   'What factors affect a credit score?',

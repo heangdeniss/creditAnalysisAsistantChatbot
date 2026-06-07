@@ -1,3 +1,4 @@
+import '../style/InputBar.css';
 import { useEffect, useRef, useState } from 'react';
 import { transcribeAudio } from '../api/chat';
 

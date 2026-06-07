@@ -1,0 +1,109 @@
+/* ═══════════════════════════════════════════════════════════════
+   INPUT BAR
+   ═══════════════════════════════════════════════════════════════ */
+.input-bar {
+  flex-shrink: 0;
+  padding: 12px 24px 14px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.input-row { display: flex; gap: 10px; align-items: flex-end; }
+
+.input-box {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--r);
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 0.91rem;
+  resize: none;
+  line-height: 1.55;
+  outline: none;
+  min-height: 42px;
+  max-height: 160px;
+  transition: border-color .2s;
+}
+.input-box::placeholder { color: var(--muted); }
+.input-box:focus { border-color: var(--accent); }
+.input-box:disabled { opacity: .45; cursor: not-allowed; }
+
+.send-btn {
+  width: 42px; height: 42px;
+  flex-shrink: 0;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--r);
+  display: grid; place-items: center;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.send-btn svg { width: 18px; height: 18px; stroke: #fff; }
+.send-btn:hover:not(:disabled) { background: var(--accent-h); }
+.send-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+.mic-btn {
+  width: 42px; height: 42px;
+  flex-shrink: 0;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  display: grid; place-items: center;
+  cursor: pointer;
+  color: var(--text);
+  transition: border-color .15s, color .15s, background .15s, opacity .15s;
+}
+.mic-btn svg { width: 18px; height: 18px; }
+.mic-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-h);
+  background: rgba(91,127,255,.16);
+}
+.mic-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.mic-btn-recording {
+  border-color: var(--error);
+  color: var(--error);
+  background: rgba(255,95,95,.12);
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,95,95,.45); }
+  50% { box-shadow: 0 0 0 6px rgba(255,95,95,0); }
+}
+
+.stop-btn {
+  width: 42px; height: 42px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 2px solid var(--error);
+  border-radius: var(--r);
+  display: grid; place-items: center;
+  cursor: pointer;
+  color: var(--error);
+  transition: background .15s, color .15s;
+  animation: stop-pulse 1.4s ease-in-out infinite;
+}
+.stop-btn svg { width: 14px; height: 14px; }
+.stop-btn:hover { background: var(--error); color: #fff; animation: none; }
+@keyframes stop-pulse {
+  0%, 100% { border-color: var(--error);   box-shadow: 0 0 0 0 rgba(255,95,95,.5); }
+  50%       { border-color: #ff8a8a; box-shadow: 0 0 0 5px rgba(255,95,95,0); }
+}
+
+.input-hint { font-size: .73rem; color: var(--muted); margin-top: 6px; }
+.input-hint-error { color: var(--error); }
+kbd {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: .7rem;
+  font-family: inherit;
+}
+

@@ -1,3 +1,4 @@
+import '../style/ScenarioPanel.css';
 import { useEffect, useMemo, useState } from 'react';
 import { simulateScenarios } from '../api/predict';
 

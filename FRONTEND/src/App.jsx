@@ -1,3 +1,4 @@
+import './style/App.css';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ChatWindow from './components/ChatWindow';
 import InputBar from './components/InputBar';

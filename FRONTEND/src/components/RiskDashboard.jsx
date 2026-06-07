@@ -1,3 +1,4 @@
+import '../style/RiskDashboard.css';
 import { useMemo } from 'react';
 import {
   ArcElement,
